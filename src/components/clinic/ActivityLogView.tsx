@@ -1,5 +1,6 @@
 // =======================================================================
-// PhysioRecord — Role-Based Access Control (RBAC) & Immutable Audit Log (Phase 9)
+// PhysioRecord — Activity Log & Staff Labels (Phase 1C & Phase 9)
+// Local-First Activity Trail & Transparent Staff Attribution
 // =======================================================================
 
 import React, { useState } from 'react';
@@ -12,13 +13,21 @@ import {
 } from '../../services/clinicOperationsService';
 import { formatClinicalDate } from '../../utils/date';
 import type { ClinicStaffMember, AuditLogEntry } from '../../types/clinicManagement';
-import { ShieldCheck, UserCheck, Lock, FileSpreadsheet, CheckCircle2, XCircle, Database } from 'lucide-react';
+import {
+  ClipboardList,
+  UserCheck,
+  FileText,
+  CheckCircle2,
+  Database,
+  ShieldAlert,
+  Info,
+} from 'lucide-react';
 
-interface AuditAndRbacViewProps {
+interface ActivityLogViewProps {
   onRoleChanged?: (staff: ClinicStaffMember) => void;
 }
 
-export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChanged }) => {
+export const ActivityLogView: React.FC<ActivityLogViewProps> = ({ onRoleChanged }) => {
   const { language, isRtl } = useLanguage();
   const isAr = language === 'ar';
   const { persistenceGranted } = useVault();
@@ -44,21 +53,38 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
       className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6"
       dir={isRtl ? 'rtl' : 'ltr'}
     >
+      {/* Permanent Security & Data Responsibility Notice */}
+      <div className="bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl p-4 sm:p-5 text-amber-950 dark:text-amber-200">
+        <div className="flex items-start gap-3">
+          <ShieldAlert className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs sm:text-sm">
+            <h2 className="font-extrabold text-amber-900 dark:text-amber-100 flex items-center gap-2">
+              <span>{isAr ? 'إشعار المسؤولية وأمان البيانات السريرية' : 'Clinical Security & Data Responsibility Notice'}</span>
+            </h2>
+            <p className="leading-relaxed">
+              {isAr
+                ? 'يعمل PhysioRecord بنظام محلي كامل داخل متصفح هذا الجهاز (Local-First). لا تخرج أي بيانات أو تشخيصات أو سجلات مرضى إلى خوادم سحابية. لا توجد أي نسخة احتياطية سحابية تلقائية، وفقدان كلمة مرور الخزينة ومفتاح الاسترداد يعني فقدان البيانات نهائياً وبشكل غير قابل للاسترجاع. تقع مسؤولية تصدير وحفظ النسخ الاحتياطية الدورية بصيغة (.ptbackup) على عاتق المعالج والعيادة بالكامل.'
+                : 'PhysioRecord runs entirely client-side in this device’s browser (Local-First). No patient data, diagnoses, or records leave this device or touch cloud servers. No automatic cloud backup exists; losing both your vault password and recovery key results in permanent, irreversible data loss. Taking routine encrypted exports (.ptbackup) and keeping them secure is strictly the clinician’s and clinic’s responsibility.'}
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400" />
+            <ClipboardList className="w-5 h-5 text-teal-600 dark:text-teal-400" />
             <span>
               {isAr
-                ? 'صلاحيات المستخدمين وسجل التدقيق الأمني والسريري (RBAC & Audit Log)'
-                : 'Role-Based Access Control (RBAC) & Clinical Audit Trail'}
+                ? 'سجل النشاط وتصنيفات الكادر (Activity Log & Staff Labels)'
+                : 'Activity Log & Staff Labels'}
             </span>
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             {isAr
-              ? 'إدارة صلاحيات الكادر الطبي والاستقبال، قفل الملاحظات المعتمدة بـ SHA-256، وتتبع كافة العمليات الحساسة.'
-              : 'Manage clinical and front-desk staff permissions, SHA-256 note locks, and immutable audit logs.'}
+              ? 'تحديد هوية الموثق السريري النشط، ومطالعة سجل العمليات الموثقة محلياً بالختم الرقمي SHA-256.'
+              : 'Select active clinical attribution label and inspect locally verified operations.'}
           </p>
         </div>
 
@@ -70,13 +96,23 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
           </span>
           <span className={persistenceGranted ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
             {persistenceGranted
-              ? (isAr ? 'مستمر ومحمي' : 'Persistent (Protected)')
-              : (isAr ? 'قياسي (Best-Effort)' : 'Best-Effort')}
+              ? (isAr ? 'تخزين دائم (Persistent Storage)' : 'Persistent Storage')
+              : (isAr ? 'تخزين قياسي (Best-Effort)' : 'Best-Effort')}
           </span>
         </div>
       </div>
 
-      {/* Staff Role Switcher Cards */}
+      {/* Staff Label Clarification Notice */}
+      <div className="p-3.5 bg-slate-100 dark:bg-slate-850 border border-slate-200 dark:border-slate-750 rounded-xl text-xs text-slate-700 dark:text-slate-300 flex items-start gap-2.5">
+        <Info className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
+        <p className="leading-relaxed">
+          {isAr
+            ? 'تنبيه الشفافية المعمارية: في التطبيقات المحلية الخالية من خادم وسيط، تعمل تصنيفات الكادر لأغراض التوثيق الإداري والسريري ونسب السجلات لأصحابها (Attribution). يمكن لأي شخص يملك وصولاً فعلياً لهذا الجهاز تبديل هوية الكادر بحرية.'
+            : 'Architectural Transparency Notice: In local-only browser apps without a central auth server, staff labels serve clinical and administrative attribution. Anyone with physical access to this unlocked device can switch identities.'}
+        </p>
+      </div>
+
+      {/* Staff Label Switcher Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {CLINIC_STAFF_ROSTER.map((staff) => {
           const isCurrent = activeStaff.id === staff.id;
@@ -88,7 +124,7 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
               onClick={() => handleSelectStaff(staff.id)}
               className={`text-start p-4 rounded-2xl border transition-all cursor-pointer space-y-2 ${
                 isCurrent
-                  ? 'bg-teal-50/70 dark:bg-teal-950/50 border-teal-600 dark:border-teal-500'
+                  ? 'bg-teal-50/70 dark:bg-teal-950/50 border-teal-600 dark:border-teal-500 ring-2 ring-teal-500/20'
                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300'
               }`}
             >
@@ -111,56 +147,64 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
         })}
       </div>
 
-      {/* Active Role Permission Matrix */}
+      {/* Active Role Intended Clinical Responsibilities */}
       <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
         <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
           {isAr
-            ? `الصلاحيات الممنوحة للدور الحالي (${perms.labelAr}):`
-            : `Active Role Capabilities (${perms.labelEn}):`}
+            ? `المهام السريرية والإدارية المخصصة لهذا التصنيف (${perms.labelAr}):`
+            : `Designated Clinical & Operational Tasks (${perms.labelEn}):`}
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
           {[
             {
               ok: perms.canEditClinicalCharts,
-              ar: 'تحرير السجلات والتقييمات السريرية والتمارين',
-              en: 'Edit Clinical Assessments & Flowsheets',
+              ar: 'توثيق السجلات والتقييمات السريرية والتمارين',
+              en: 'Clinical Assessments & Flowsheets Documentation',
             },
             {
               ok: perms.canFinalizeAndLockNotes,
-              ar: 'اعتماد وقفل الملاحظات السريرية نهائياً (Sign & Lock)',
-              en: 'Sign & Lock Finalized Clinical Notes',
+              ar: 'اعتماد وقفل الملاحظات بختم النزاهة SHA-256',
+              en: 'Sign & Seal Clinical Notes (SHA-256)',
             },
             {
               ok: perms.canManageAppointments,
-              ar: 'إدارة المواعيد وقائمة الانتظار',
-              en: 'Manage Appointments & Waiting List',
+              ar: 'جدولة المواعيد وتنظيم قائمة الانتظار',
+              en: 'Appointment Scheduling & Waitlist',
             },
             {
               ok: perms.canCollectPaymentsIQD,
-              ar: 'إصدار الفواتير واستلام الدفعات النقدية (IQD)',
-              en: 'Issue Invoices & Collect IQD Payments',
+              ar: 'إصدار وصولات القبض واستلام النقد (IQD)',
+              en: 'Issue Receipts & Collect IQD Cash',
             },
             {
               ok: perms.canDeleteFinancialRecords,
-              ar: 'حذف وتعديل السجلات المالية والمصاريف',
-              en: 'Delete Financial Records & Expenses',
+              ar: 'إدارة وتدقيق السجلات المالية والمصاريف',
+              en: 'Financial Ledger & Expense Management',
             },
             {
               ok: perms.canViewAuditLogs,
-              ar: 'الاطلاع على سجل التدقيق الأمني الكامل',
-              en: 'Inspect Security & Clinical Audit Log',
+              ar: 'الاطلاع على سجل النشاط والعمليات الموثقة',
+              en: 'Inspect Local Activity Log',
             },
           ].map((item, i) => (
             <div
               key={i}
               className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center gap-2.5"
             >
-              {item.ok ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              ) : (
-                <XCircle className="w-4 h-4 text-rose-500 shrink-0" />
-              )}
-              <span className="font-semibold text-slate-800 dark:text-slate-200">
+              <CheckCircle2
+                className={`w-4 h-4 shrink-0 ${
+                  item.ok
+                    ? 'text-teal-600 dark:text-teal-400'
+                    : 'text-slate-300 dark:text-slate-600'
+                }`}
+              />
+              <span
+                className={`font-semibold ${
+                  item.ok
+                    ? 'text-slate-800 dark:text-slate-200'
+                    : 'text-slate-400 dark:text-slate-500 line-through'
+                }`}
+              >
                 {isAr ? item.ar : item.en}
               </span>
             </div>
@@ -168,19 +212,19 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
         </div>
       </div>
 
-      {/* Immutable Audit Log Table */}
+      {/* Activity Log Table */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Lock className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+            <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400" />
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">
               {isAr
-                ? 'سجل التدقيق الأمني والسريري غير القابل للتعديل (Immutable Audit Trail)'
-                : 'Immutable Clinical & Financial Audit Trail'}
+                ? 'سجل النشاط السريري والإداري (Local Activity Log)'
+                : 'Local Activity Log'}
             </h2>
           </div>
           <span className="text-xs font-mono text-slate-500 tabular-nums">
-            {auditLogs.length} {isAr ? 'عملية موثقة' : 'events'}
+            {auditLogs.length} {isAr ? 'عملية مسجلة' : 'records'}
           </span>
         </div>
 
@@ -189,9 +233,9 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-850 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-bold">
                 <th className="py-3 px-4 text-start">{isAr ? 'التوقيت' : 'Timestamp'}</th>
-                <th className="py-3 px-4 text-start">{isAr ? 'المستخدم / الدور' : 'Actor / Role'}</th>
+                <th className="py-3 px-4 text-start">{isAr ? 'الموثق / التصنيف' : 'Actor / Label'}</th>
                 <th className="py-3 px-4 text-start">{isAr ? 'نوع الإجراء' : 'Action Type'}</th>
-                <th className="py-3 px-4 text-start">{isAr ? 'التفاصيل الموثقة' : 'Audit Summary'}</th>
+                <th className="py-3 px-4 text-start">{isAr ? 'تفاصيل النشاط الموثق' : 'Activity Summary'}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -199,8 +243,8 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
                 <tr>
                   <td colSpan={4} className="py-8 text-center text-slate-500">
                     {isAr
-                      ? 'سيتم تسجيل كافة العمليات السريرية والمالية هنا تلقائياً.'
-                      : 'All clinical and financial operations are logged here automatically.'}
+                      ? 'سيتم توثيق كافة العمليات السريرية والمالية هنا تلقائياً.'
+                      : 'All clinical and financial operations are recorded here automatically.'}
                   </td>
                 </tr>
               ) : (
@@ -228,3 +272,6 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
     </div>
   );
 };
+
+// Backwards-compatible alias for existing imports
+export const AuditAndRbacView = ActivityLogView;

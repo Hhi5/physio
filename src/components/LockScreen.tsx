@@ -244,7 +244,7 @@ export const LockScreen: React.FC = () => {
             )}
           </div>
           <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-teal-50 dark:bg-teal-950 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 mb-2">
-            AES-256-GCM ZERO-KNOWLEDGE EHR
+            {bi('تشفير محلي (AES-256-GCM)', 'Local AES-256-GCM Encryption')}
           </span>
           <h1 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">
             {mode === 'show_recovery_key'
@@ -382,6 +382,16 @@ export const LockScreen: React.FC = () => {
         {/* VIEW 2: STANDARD UNLOCK */}
         {mode === 'unlock' && (
           <form onSubmit={handleUnlock} className="space-y-4">
+            <div className="p-3 bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-600 dark:text-slate-400 text-xs leading-relaxed">
+              <p>
+                <strong>{bi('إشعار الأمان والبيانات:', 'Security & Data Notice:')}</strong>{' '}
+                {bi(
+                  'البيانات محفوظة على هذا الجهاز فقط ولا توجد خوادم سحابية. فقدان كلمة المرور ومفتاح الاسترداد يعني فقدان البيانات بشكل دائم.',
+                  'Data never leaves this device; no cloud backup exists. Lost password + lost recovery key = permanent irreversible data loss.'
+                )}
+              </p>
+            </div>
+
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5">
                 {bi('كلمة مرور الخزينة', 'Vault Password')}
@@ -450,10 +460,10 @@ export const LockScreen: React.FC = () => {
             <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-xl text-amber-900 dark:text-amber-200 text-xs leading-relaxed flex items-start gap-2">
               <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
               <span>
-                <strong>{bi('تنبيه سريري هام:', 'Important Clinical Notice:')}</strong>{' '}
+                <strong>{bi('تنبيه أمني وإشعار البيانات:', 'Important Security Notice:')}</strong>{' '}
                 {bi(
-                  'تعتمد هذه الخزينة على معمارية المعرفة الصفرية المشفرة بـ AES-256-GCM و PBKDF2 (600,000 دورة). سيتم إنشاء مفتاح استرداد طارئ بعد ضبط كلمة المرور.',
-                  'This zero-knowledge vault is encrypted locally with AES-256-GCM and PBKDF2 (600,000 iterations). A master recovery key will be generated for you.'
+                  'يتم تشفير هذه الخزينة محلياً داخل المتصفح بـ AES-256-GCM واشتقاق مفاتيح PBKDF2 (600,000 دورة). لا توجد نسخة احتياطية سحابية، وسيتم إنشاء مفتاح استرداد طارئ بعد ضبط كلمة المرور.',
+                  'This vault is encrypted locally in your browser with AES-256-GCM and PBKDF2 (600,000 iterations). No cloud backup exists; an emergency recovery key will be generated for you.'
                 )}
               </span>
             </div>

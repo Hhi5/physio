@@ -43,6 +43,8 @@ import { useLanguage } from '../context/LanguageContext';
 import { SessionModal } from './SessionModal';
 import { SoapModal } from './SoapModal';
 import { AddendumModal } from './AddendumModal';
+import { EpisodeDischargeModal } from './EpisodeDischargeModal';
+import { useEpisodes } from '../context/EpisodeContext';
 import { SessionService } from '../services/sessionService';
 import {
   compareLongitudinalRomEntries,
@@ -85,6 +87,8 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
   // Addenda counts mapped by sessionId
   const [addendaCountCache, setAddendaCountCache] = useState<Record<string, number>>({});
 
+  const { closeEpisode } = useEpisodes();
+
   // Modals state
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
   const [sessionToEdit, setSessionToEdit] = useState<SessionRecord | null>(null);
@@ -95,6 +99,7 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
   const [activeSessionForAddendum, setActiveSessionForAddendum] = useState<SessionRecord | null>(null);
   const [addendaListForActiveSession, setAddendaListForActiveSession] = useState<ClinicalAddendumRecord[]>([]);
   const [isAddendumModalOpen, setIsAddendumModalOpen] = useState(false);
+  const [isDischargeModalOpen, setIsDischargeModalOpen] = useState(false);
 
   // Cancellation prompt
   const [sessionToCancel, setSessionToCancel] = useState<SessionRecord | null>(null);
@@ -346,7 +351,17 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
           </p>
         </div>
 
-        <div>
+        <div className="flex items-center gap-2">
+          {!isEpisodeClosed && (
+            <button
+              type="button"
+              onClick={() => setIsDischargeModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
+            >
+              <span>{bi('تخريج الحلقة', 'Discharge Episode')}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
@@ -807,6 +822,19 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
           session={activeSessionForAddendum}
           existingAddenda={addendaListForActiveSession}
           onAddAddendum={handleSaveAddendum}
+        />
+      )}
+
+      {/* Episode Discharge Modal */}
+      {isDischargeModalOpen && (
+        <EpisodeDischargeModal
+          isOpen={isDischargeModalOpen}
+          onClose={() => setIsDischargeModalOpen(false)}
+          episode={episode}
+          onConfirmDischarge={async (dischargeInfo) => {
+            await closeEpisode(episode.id, dischargeInfo);
+            setIsDischargeModalOpen(false);
+          }}
         />
       )}
 

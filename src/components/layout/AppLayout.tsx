@@ -16,8 +16,8 @@ import { ReceptionCommandCenterView } from '../clinic/ReceptionCommandCenterView
 import { AppointmentScheduleView } from '../clinic/AppointmentScheduleView';
 import { IraqiFinancialLedgerView } from '../clinic/IraqiFinancialLedgerView';
 import { ExerciseLibraryHepView } from '../clinic/ExerciseLibraryHepView';
-import { AuditAndRbacView } from '../clinic/AuditAndRbacView';
-import { PatientDrawer } from '../drawers/PatientDrawer';
+import { ActivityLogView } from '../clinic/ActivityLogView';
+import { PatientModal } from '../PatientModal';
 import { ClinicalToolkitModal } from '../toolkit/ClinicalToolkitModal';
 import { BackupRestoreModal } from '../BackupRestoreModal';
 import { SyntheticDataModal } from '../SyntheticDataModal';
@@ -285,7 +285,7 @@ export const AppLayout: React.FC = () => {
           </div>
         ) : activeNavView === 'audit' ? (
           <div className="flex-1 overflow-y-auto">
-            <AuditAndRbacView onRoleChanged={() => setRoleTick((t) => t + 1)} />
+            <ActivityLogView onRoleChanged={() => setRoleTick((t) => t + 1)} />
           </div>
         ) : (
           <div className="flex-1 flex flex-col h-full overflow-y-auto">
@@ -359,8 +359,8 @@ export const AppLayout: React.FC = () => {
         })}
       </nav>
 
-      {/* Global Slide-Over Drawers & Modals */}
-      <PatientDrawer
+      {/* Global Modals */}
+      <PatientModal
         isOpen={isNewPatientDrawerOpen}
         onClose={() => setIsNewPatientDrawerOpen(false)}
         onSavedSuccess={(newPatient) => {

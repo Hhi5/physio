@@ -241,7 +241,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="truncate">{isAr ? 'مكتبة التمارين و HEP' : 'Exercise Library & HEP'}</span>
         </button>
 
-        {/* RBAC & Audit Log */}
+        {/* Activity Log & Staff Labels */}
         <button
           type="button"
           onClick={() => handleNavClick('audit')}
@@ -252,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }`}
         >
           <ShieldCheck className="w-4 h-4 shrink-0" />
-          <span className="truncate">{isAr ? 'الصلاحيات وسجل التدقيق' : 'RBAC & Audit Trail'}</span>
+          <span className="truncate">{isAr ? 'سجل النشاط وتصنيفات الكادر' : 'Activity Log & Staff'}</span>
         </button>
 
         {/* Clinical Reference Toolkit */}

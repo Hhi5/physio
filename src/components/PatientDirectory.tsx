@@ -169,7 +169,7 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
         <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 flex items-center justify-between shadow-2xs">
           <div>
             <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              {bi('حالة التشفير السريري', 'Zero-Trust Encryption')}
+              {bi('التشفير المحلي', 'Local AES-256-GCM Encryption')}
             </span>
             <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1.5">
               <span>AES-256-GCM</span>

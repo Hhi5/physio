@@ -13,8 +13,8 @@ import type { PatientRecord, EpisodeRecord, SessionRecord } from '../../types/cl
 import { PatientSummarySidebar } from './PatientSummarySidebar';
 import { MasterPatientChart } from './MasterPatientChart';
 import { TreatmentSessionView } from './TreatmentSessionView';
-import { EpisodeDrawer } from '../drawers/EpisodeDrawer';
-import { SessionDrawer } from '../drawers/SessionDrawer';
+import { EpisodeModal } from '../EpisodeModal';
+import { SessionModal } from '../SessionModal';
 import { FolderOpen, Plus, X, Activity } from 'lucide-react';
 
 interface PatientWorkspaceProps {
@@ -196,30 +196,46 @@ export const PatientWorkspace: React.FC<PatientWorkspaceProps> = ({
         )}
       </div>
 
-      {/* Episode Creation Drawer */}
-      <EpisodeDrawer
-        isOpen={isEpisodeDrawerOpen}
-        onClose={() => setIsEpisodeDrawerOpen(false)}
-        patientId={patient.id}
-        patientName={patient.data.fullName}
-        onEpisodeCreated={(newEp) => {
-          setEpisodes((prev) => [newEp, ...prev]);
-          setSelectedEpisodeId(newEp.id);
-        }}
-      />
+      {/* Episode Creation Modal */}
+      {isEpisodeDrawerOpen && (
+        <EpisodeModal
+          isOpen={isEpisodeDrawerOpen}
+          onClose={() => setIsEpisodeDrawerOpen(false)}
+          patient={patient}
+          onSaved={async (epData) => {
+            if (!dek) return;
+            try {
+              const created = await EpisodeService.createEpisode(patient.id, epData.data, dek);
+              setEpisodes((prev) => [created, ...prev]);
+              setSelectedEpisodeId(created.id);
+            } catch (err) {
+              console.error('Failed to create episode from modal:', err);
+            }
+          }}
+        />
+      )}
 
-      {/* Session Creation Drawer */}
-      <SessionDrawer
-        isOpen={isSessionDrawerOpen}
-        onClose={() => setIsSessionDrawerOpen(false)}
-        patientId={patient.id}
-        episodeId={selectedEpisodeId || activeEpisode?.id || ''}
-        nextSessionNumber={SessionService.computeNextSessionNumber(episodeSessions)}
-        onSessionCreated={(newSess) => {
-          setSessions((prev) => [newSess, ...prev]);
-          setSelectedSessionId(newSess.id);
-        }}
-      />
+      {/* Session Creation Modal */}
+      {isSessionDrawerOpen && activeEpisode && (
+        <SessionModal
+          isOpen={isSessionDrawerOpen}
+          onClose={() => setIsSessionDrawerOpen(false)}
+          episode={activeEpisode}
+          existingSessionCount={episodeSessions.length}
+          nextSessionNumber={SessionService.computeNextSessionNumber(episodeSessions)}
+          onSave={async (sessPayload) => {
+            if (!dek) return;
+            const created = await SessionService.createSession(
+              patient.id,
+              activeEpisode.id,
+              sessPayload,
+              dek
+            );
+            setSessions((prev) => [created, ...prev]);
+            setSelectedSessionId(created.id);
+          }}
+        />
+      )}
     </div>
   );
 };
