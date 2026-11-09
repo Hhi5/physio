@@ -18,6 +18,20 @@ import {
   CURRENT_DEK_VERSION,
 } from '../crypto/vault';
 import { subscribeToVaultEvents, broadcastVaultEvent } from '../utils/vaultEvents';
+import { SessionService } from '../services/sessionService';
+import { LocalStorageMigrationService, type LocalStorageMigrationResult } from '../services/localStorageMigrationService';
+
+export interface VaultRepairSummary {
+  repairedCount: number;
+  skippedCount: number;
+  repairedSessionIds: string[];
+  skippedSessionIds: string[];
+  repairedSessions: Array<{
+    sessionId: string;
+    episodeId: string;
+    patientId: string;
+  }>;
+}
 
 interface VaultContextType {
   ready: boolean;
@@ -27,6 +41,10 @@ interface VaultContextType {
   vaultKek: CryptoKey | null; // Active Vault KEK held only while unlocked
   vaultGeneration: number | null; // Technical epoch/generation bound to in-memory DEK
   persistenceGranted: boolean;
+  lastRepairSummary: VaultRepairSummary | null;
+  repairError: string | null;
+  lastMigrationResult: LocalStorageMigrationResult | null;
+  dismissRepairNotice: () => void;
   setupPassword: (password: string) => Promise<void>;
   unlock: (password: string) => Promise<boolean>;
   changeVaultPassword: (oldPass: string, newPass: string) => Promise<void>;
@@ -46,9 +64,17 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [vaultKek, setVaultKek] = useState<CryptoKey | null>(null);
   const [vaultGeneration, setVaultGeneration] = useState<number | null>(null);
   const [persistenceGranted, setPersistenceGranted] = useState(false);
+  const [lastRepairSummary, setLastRepairSummary] = useState<VaultRepairSummary | null>(null);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  const [lastMigrationResult, setLastMigrationResult] = useState<LocalStorageMigrationResult | null>(null);
 
   const lastActivityRef = useRef<number>(Date.now());
   const autoLockTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const dismissRepairNotice = useCallback(() => {
+    setLastRepairSummary(null);
+    setRepairError(null);
+  }, []);
 
   // Best-effort sensitive memory cleanup and lock
   const lock = useCallback(() => {
@@ -171,6 +197,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [updateActivity]);
 
   // Unlock Vault: Verify KEK -> Unwrap DEK as NON-EXTRACTABLE into volatile memory
+  // -> Run idempotent repair for any pre-1A-i.5 half-finalized sessions and surface result/errors to UI
   const unlock = useCallback(async (password: string): Promise<boolean> => {
     const meta = await db.vaultMeta.get('auth');
     if (!meta) throw new Error('الخزينة غير مهيأة بعد');
@@ -188,6 +215,31 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const gen = meta.vaultGeneration ?? 1;
     const recoveredDek = await unwrapOperationalDEK(meta.wrappedDek, meta.wrappedDekIv, candidateKek, gen);
     bindDekToGeneration(recoveredDek, gen);
+
+    try {
+      const repairResult = await SessionService.repairHalfFinalizedSessions(recoveredDek, db);
+      setRepairError(null);
+      if (repairResult.repairedCount > 0 || repairResult.skippedCount > 0) {
+        setLastRepairSummary({
+          repairedCount: repairResult.repairedCount,
+          skippedCount: repairResult.skippedCount,
+          repairedSessionIds: repairResult.repairedSessionIds,
+          skippedSessionIds: repairResult.skippedSessionIds,
+          repairedSessions: repairResult.repairedSessions,
+        });
+      } else {
+        setLastRepairSummary(null);
+      }
+
+      const migrationResult = await LocalStorageMigrationService.runMigration(recoveredDek, db);
+      setLastMigrationResult(migrationResult);
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'فشل فحص وإصلاح حالة قفل الملاحظات السريرية بعد فتح الخزينة.';
+      setRepairError(msg);
+    }
 
     setDek(recoveredDek);
     setVaultKek(candidateKek);
@@ -282,6 +334,10 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         vaultKek,
         vaultGeneration,
         persistenceGranted,
+        lastRepairSummary,
+        repairError,
+        lastMigrationResult,
+        dismissRepairNotice,
         setupPassword,
         unlock,
         changeVaultPassword,

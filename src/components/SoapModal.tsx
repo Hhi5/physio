@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { 
   SESSION_TYPES, 
+  ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES,
   type SessionRecord, 
   type SoapNoteRecord, 
   type SoapNoteData, 
@@ -186,10 +187,27 @@ export const SoapModal: React.FC<SoapModalProps> = ({
   if (!isOpen) return null;
 
   const isFinalized = session.status === 'finalized' || existingSoap?.data.isFinalized === true;
+  const isRomMmtBodyChartReadOnly =
+    isFinalized || !ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES;
   const sessionTypeInfo = SESSION_TYPES[session.sessionType] || SESSION_TYPES.follow_up;
 
   // Build Payload
+  // Amendment D: When ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES is false (default),
+  // existing ROM/MMT/bodyChart/neuroScreening inside db.soapNotes rows stay untouched.
   const constructPayload = (): SoapNoteData => {
+    const preservedRom = ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES
+      ? romBattery
+      : existingSoap?.data.objective?.romBattery;
+    const preservedMmt = ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES
+      ? mmtBattery
+      : existingSoap?.data.objective?.mmtBattery;
+    const preservedNeuro = ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES
+      ? neuroScreening
+      : existingSoap?.data.objective?.neuroScreening;
+    const preservedBodyChart = ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES
+      ? bodyChart
+      : existingSoap?.data.subjective?.bodyChart;
+
     const objectiveData: SoapObjectiveData = {
       status: objectiveStatus,
       notAssessedReason: objectiveStatus === 'not_assessed' ? notAssessedReason.trim() : undefined,
@@ -197,9 +215,9 @@ export const SoapModal: React.FC<SoapModalProps> = ({
       clinicalObservations: clinicalObservations.trim() || undefined,
       objectiveFindings: objectiveFindings.trim() || undefined,
       functionalOrPreliminaryMeasurements: functionalOrPreliminaryMeasurements.trim() || undefined,
-      romBattery,
-      mmtBattery,
-      neuroScreening,
+      romBattery: preservedRom,
+      mmtBattery: preservedMmt,
+      neuroScreening: preservedNeuro,
       dailyInterventionsSummary: dailyInterventionsSummary.trim() || undefined,
     };
 
@@ -221,7 +239,7 @@ export const SoapModal: React.FC<SoapModalProps> = ({
           contextNotes: painContextNotes.trim() || undefined,
         },
         painLocationDescription: painLocationDescription.trim() || undefined,
-        bodyChart,
+        bodyChart: preservedBodyChart,
         homeExerciseCompliance,
         homeExerciseComplianceNotes: homeExerciseComplianceNotes.trim() || undefined,
         responseToPreviousTreatment: responseToPreviousTreatment.trim() || undefined,
@@ -540,10 +558,18 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                 <label className="block text-xs font-semibold text-slate-800 mb-1.5">
                   {bi('مخطط توثيق أعراض المريض السريري', 'Patient Body Chart')}
                 </label>
+                {!ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES && (
+                  <p className="text-[11px] text-slate-500 mb-1.5">
+                    {bi(
+                      'وضع القراءة فقط: يتم تحرير مخطط الجسم والمدى الحركي والقوة العضلية حصرياً عبر سجل تقييم الحلقة (Episode Evaluation Chart).',
+                      'Read-only view: Body Chart, ROM, and MMT are edited exclusively in the Episode Evaluation Chart.'
+                    )}
+                  </p>
+                )}
                 <PatientBodyChart
                   value={bodyChart}
-                  onChange={setBodyChart}
-                  readOnly={isFinalized}
+                  onChange={isRomMmtBodyChartReadOnly ? () => {} : setBodyChart}
+                  readOnly={isRomMmtBodyChartReadOnly}
                 />
               </div>
 
@@ -814,10 +840,10 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                   <RomMmtAssessmentPanel
                     romBattery={romBattery}
                     mmtBattery={mmtBattery}
-                    onChangeRom={setRomBattery}
-                    onChangeMmt={setMmtBattery}
+                    onChangeRom={isRomMmtBodyChartReadOnly ? undefined : setRomBattery}
+                    onChangeMmt={isRomMmtBodyChartReadOnly ? undefined : setMmtBattery}
                     activeWorkflow="rom"
-                    readOnly={isFinalized}
+                    readOnly={isRomMmtBodyChartReadOnly}
                   />
                 </div>
               )}
@@ -828,10 +854,10 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                   <RomMmtAssessmentPanel
                     romBattery={romBattery}
                     mmtBattery={mmtBattery}
-                    onChangeRom={setRomBattery}
-                    onChangeMmt={setMmtBattery}
+                    onChangeRom={isRomMmtBodyChartReadOnly ? undefined : setRomBattery}
+                    onChangeMmt={isRomMmtBodyChartReadOnly ? undefined : setMmtBattery}
                     activeWorkflow="mmt"
-                    readOnly={isFinalized}
+                    readOnly={isRomMmtBodyChartReadOnly}
                   />
                 </div>
               )}
@@ -841,8 +867,8 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                 <div className="space-y-2">
                   <NeuroScreeningPanel
                     value={neuroScreening}
-                    onChange={setNeuroScreening}
-                    readOnly={isFinalized}
+                    onChange={isRomMmtBodyChartReadOnly ? undefined : setNeuroScreening}
+                    readOnly={isRomMmtBodyChartReadOnly}
                   />
                 </div>
               )}

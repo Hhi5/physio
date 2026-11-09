@@ -12,7 +12,7 @@ import {
   CURRENT_RECORD_CRYPTO_VERSION,
   CURRENT_DEK_VERSION,
 } from '../crypto/vault';
-import { registerTestHooks } from '../utils/testHooks';
+import { isTestEnvironment, registerTestHooks } from '../utils/testHooks';
 import { ReferentialIntegrityError } from '../db/registry';
 import { EpisodeService } from './episodeService';
 import { SoapService } from './soapService';
@@ -20,7 +20,10 @@ import {
   CannotDeleteFinalizedRecordError,
   VaultGenerationChangedError,
   UnboundVaultKeyError,
+  StaleTabOverwriteError,
   CURRENT_SOAP_SCHEMA_VERSION,
+  CURRENT_SEAL_VERSION,
+  type SealVerificationResult,
   type SessionRecord,
   type SessionClinicalData,
   type EncryptedSessionEntity,
@@ -31,6 +34,8 @@ import {
   type AttendanceStatus,
 } from '../types/clinical';
 import { localDate } from '../utils/date';
+
+export const HALF_FINALIZED_REPAIR_STATE_ID = 'half_finalized_soap_repair_v1';
 
 
 interface LegacyEncryptedSessionEntity extends EncryptedSessionEntity {
@@ -48,6 +53,128 @@ async function computeSha256Digest(data: string): Promise<string> {
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function areUint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Recursively canonicalizes an object with alphabetically sorted keys, omitting `undefined` values
+ * and any keys listed in `excludeTopLevelKeys` at the root object level.
+ */
+export function canonicalizeObjectExcluding(
+  value: unknown,
+  excludeTopLevelKeys?: Set<string>
+): unknown {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeObjectExcluding(item));
+  }
+  const obj = value as Record<string, unknown>;
+  const sortedKeys = Object.keys(obj).sort();
+  const result: Record<string, unknown> = {};
+  for (const key of sortedKeys) {
+    if (excludeTopLevelKeys?.has(key)) continue;
+    const v = obj[key];
+    if (v === undefined) continue;
+    result[key] = canonicalizeObjectExcluding(v);
+  }
+  return result;
+}
+
+/**
+ * Deterministic canonical JSON serializer (sorted keys at every depth) for integrity seals.
+ */
+export function canonicalizeForSeal(value: unknown, excludeKeys?: string[]): string {
+  return JSON.stringify(
+    canonicalizeObjectExcluding(value, excludeKeys ? new Set(excludeKeys) : undefined)
+  );
+}
+
+/**
+ * Verifies the SHA-256 content integrity seal on a finalized SOAP note.
+ * Returns a tri-state `SealVerificationResult` (`status: 'valid' | 'unsealed' | 'mismatch'`):
+ * - `'unsealed'`: `contentDigestSha256` is absent (e.g., repaired legacy note) OR `sealVersion !== 1`
+ *   (legacy note finalized by earlier code before canonical sorted-key seal v1).
+ * - `'valid'`: `sealVersion === 1` and canonical SHA-256 digest matches `contentDigestSha256`.
+ * - `'mismatch'`: `sealVersion === 1` and computed canonical SHA-256 digest differs from `contentDigestSha256`.
+ */
+export async function verifySoapSeal(
+  soapData: SoapNoteData
+): Promise<SealVerificationResult> {
+  const expected = soapData.contentDigestSha256;
+  if (!expected || soapData.sealVersion !== CURRENT_SEAL_VERSION) {
+    return { status: 'unsealed', expected, actual: undefined };
+  }
+  const canonical = canonicalizeForSeal(soapData, ['contentDigestSha256']);
+  const actual = await computeSha256Digest(canonical);
+  return {
+    status: actual === expected ? 'valid' : 'mismatch',
+    expected,
+    actual,
+  };
+}
+
+/**
+ * Verifies the SHA-256 content integrity seal on a finalized Session (and its linked SOAP note when present).
+ * Returns a tri-state `SealVerificationResult` (`status: 'valid' | 'unsealed' | 'mismatch'`):
+ * - `'unsealed'`: `contentIntegrityDigestSha256` is absent, `sessionData.sealVersion !== 1`, or the linked
+ *   SOAP note is `'unsealed'`.
+ * - `'mismatch'`: `sealVersion === 1` and either the SOAP seal is `'mismatch'`, an attended session is missing
+ *   its SOAP note, or the session envelope digest does not match `contentIntegrityDigestSha256`.
+ * - `'valid'`: both session and SOAP seals have `sealVersion === 1` and match their canonical SHA-256 digests.
+ */
+export async function verifySessionSeal(
+  sessionData: SessionClinicalData,
+  soapData?: SoapNoteData | null
+): Promise<SealVerificationResult> {
+  if (soapData) {
+    const soapCheck = await verifySoapSeal(soapData);
+    if (soapCheck.status === 'mismatch') {
+      return {
+        status: 'mismatch',
+        expected: soapCheck.expected,
+        actual: soapCheck.actual,
+      };
+    }
+    if (soapCheck.status === 'unsealed') {
+      return {
+        status: 'unsealed',
+        expected: soapCheck.expected,
+        actual: soapCheck.actual,
+      };
+    }
+  }
+
+  const expected = sessionData.contentIntegrityDigestSha256;
+  if (!expected || sessionData.sealVersion !== CURRENT_SEAL_VERSION) {
+    return { status: 'unsealed', expected, actual: undefined };
+  }
+
+  if (!soapData && sessionData.attendanceStatus === 'attended') {
+    return { status: 'mismatch', expected, actual: undefined };
+  }
+
+  const canonicalEnvelope = canonicalizeForSeal({
+    session: canonicalizeObjectExcluding(
+      sessionData,
+      new Set(['contentIntegrityDigestSha256'])
+    ),
+    soapDigestSha256: soapData?.contentDigestSha256 ?? null,
+  });
+  const actual = await computeSha256Digest(canonicalEnvelope);
+  return {
+    status: actual === expected ? 'valid' : 'mismatch',
+    expected,
+    actual,
+  };
 }
 
 /**
@@ -98,12 +225,32 @@ export type SessionCreationTestHook = (
 let sessionCreationTestHook: SessionCreationTestHook | null = null;
 
 export const setSessionCreationTestHook = (hook: SessionCreationTestHook | null) => {
+  if (!isTestEnvironment()) {
+    sessionCreationTestHook = null;
+    return;
+  }
   sessionCreationTestHook = hook;
+};
+
+export type SessionMutationTestHook = (
+  operation: 'updateSession' | 'cancelSession' | 'deleteSession',
+  context: { sessionId: string }
+) => Promise<void> | void;
+
+let sessionMutationTestHook: SessionMutationTestHook | null = null;
+
+export const setSessionMutationTestHook = (hook: SessionMutationTestHook | null) => {
+  if (!isTestEnvironment()) {
+    sessionMutationTestHook = null;
+    return;
+  }
+  sessionMutationTestHook = hook;
 };
 
 // Safely register test hook on window for test environments only (no-op in production)
 registerTestHooks({
   setSessionCreationTestHook,
+  setSessionMutationTestHook,
 });
 
 export class SessionService {
@@ -659,14 +806,32 @@ export class SessionService {
 
   /**
    * Update an existing draft Clinical Session.
-   * Prevents direct modifications of finalized sessions.
+   * Prevents direct modifications of finalized sessions and protects against check-then-put races:
+   * - Accepts optional `expectedUpdatedAt`
+   * - Computes all crypto BEFORE opening the Dexie transaction
+   * - Re-reads and verifies `updatedAt` and `iv` on both session and linked SOAP note inside ONE `rw` transaction before `put`.
    */
   static async updateSession(
     sessionId: string,
     data: Partial<SessionClinicalData>,
     dek: CryptoKey,
-    database: PhysioRecordDatabase = defaultDb
+    database: PhysioRecordDatabase = defaultDb,
+    expectedUpdatedAt?: string
   ): Promise<SessionRecord> {
+    const existingEntity = await database.sessions.get(sessionId);
+    if (!existingEntity) {
+      throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
+    }
+
+    if (expectedUpdatedAt !== undefined && existingEntity.updatedAt !== expectedUpdatedAt) {
+      throw new StaleTabOverwriteError(
+        'تم تعديل الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+      );
+    }
+
+    const baselineSessionUpdatedAt = expectedUpdatedAt ?? existingEntity.updatedAt;
+    const baselineSessionIv = existingEntity.iv;
+
     const existing = await this.getSessionById(sessionId, dek, database);
     if (!existing) {
       throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
@@ -680,6 +845,13 @@ export class SessionService {
     }
 
     // IMMUTABILITY RULE 2: Session cannot be modified if its associated SOAP note is finalized
+    const existingSoapEntity = await database.soapNotes
+      .where('sessionId')
+      .equals(sessionId)
+      .first();
+    const baselineSoapUpdatedAt = existingSoapEntity?.updatedAt;
+    const baselineSoapIv = existingSoapEntity?.iv;
+
     const existingSoap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
     if (existingSoap && existingSoap.data.isFinalized) {
       throw new Error(
@@ -721,7 +893,53 @@ export class SessionService {
       ciphertext,
     };
 
-    await database.sessions.put(updatedEntity);
+    if (sessionMutationTestHook) {
+      await sessionMutationTestHook('updateSession', { sessionId });
+    }
+
+    // ATOMIC IN-TRANSACTION RE-READ & CONCURRENCY CHECK
+    await database.transaction(
+      'rw',
+      [database.sessions, database.soapNotes, database.vaultMeta],
+      async () => {
+        const latestSessionEntity = await database.sessions.get(sessionId);
+        if (!latestSessionEntity) {
+          throw new StaleTabOverwriteError(
+            'تم حذف الجلسة في تبويب آخر (Changed in another tab).'
+          );
+        }
+        if (
+          latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
+          !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv)
+        ) {
+          throw new StaleTabOverwriteError(
+            'تم تعديل أو اعتماد الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+          );
+        }
+
+        const latestSoapEntity = await database.soapNotes
+          .where('sessionId')
+          .equals(sessionId)
+          .first();
+        if (baselineSoapUpdatedAt !== undefined) {
+          if (
+            !latestSoapEntity ||
+            latestSoapEntity.updatedAt !== baselineSoapUpdatedAt ||
+            (baselineSoapIv && !areUint8ArraysEqual(latestSoapEntity.iv, baselineSoapIv))
+          ) {
+            throw new StaleTabOverwriteError(
+              'تم تعديل أو اعتماد ملاحظة SOAP المرتبطة بهذه الجلسة في تبويب آخر (Changed in another tab).'
+            );
+          }
+        } else if (latestSoapEntity) {
+          throw new StaleTabOverwriteError(
+            'تم إنشاء أو اعتماد ملاحظة SOAP لهذه الجلسة في تبويب آخر (Changed in another tab).'
+          );
+        }
+
+        await database.sessions.put(updatedEntity);
+      }
+    );
 
     return {
       id: sessionId,
@@ -740,14 +958,30 @@ export class SessionService {
 
   /**
    * Cancel a draft session with documented cancellation reason.
+   * Protects against check-then-put races using the same pre-transaction crypto + in-transaction re-read pattern.
    */
   static async cancelSession(
     sessionId: string,
     cancellationReason: string,
     attendanceStatus: 'cancelled_patient' | 'cancelled_clinic' | 'no_show',
     dek: CryptoKey,
-    database: PhysioRecordDatabase = defaultDb
+    database: PhysioRecordDatabase = defaultDb,
+    expectedUpdatedAt?: string
   ): Promise<SessionRecord> {
+    const existingEntity = await database.sessions.get(sessionId);
+    if (!existingEntity) {
+      throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
+    }
+
+    if (expectedUpdatedAt !== undefined && existingEntity.updatedAt !== expectedUpdatedAt) {
+      throw new StaleTabOverwriteError(
+        'تم تعديل الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+      );
+    }
+
+    const baselineSessionUpdatedAt = expectedUpdatedAt ?? existingEntity.updatedAt;
+    const baselineSessionIv = existingEntity.iv;
+
     const existing = await this.getSessionById(sessionId, dek, database);
     if (!existing) {
       throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
@@ -755,6 +989,20 @@ export class SessionService {
 
     if (existing.status === 'finalized') {
       throw new Error('لا يمكن إلغاء جلسة سريرية معتمدة ومغلقة نهائياً.');
+    }
+
+    const existingSoapEntity = await database.soapNotes
+      .where('sessionId')
+      .equals(sessionId)
+      .first();
+    const baselineSoapUpdatedAt = existingSoapEntity?.updatedAt;
+    const baselineSoapIv = existingSoapEntity?.iv;
+
+    const existingSoap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
+    if (existingSoap && existingSoap.data.isFinalized) {
+      throw new Error(
+        'لا يمكن إلغاء جلسة سريرية مرتبطة بملاحظة SOAP معتمدة ومغلقة نهائياً.'
+      );
     }
 
     if (!cancellationReason?.trim()) {
@@ -795,7 +1043,52 @@ export class SessionService {
       ciphertext,
     };
 
-    await database.sessions.put(entity);
+    if (sessionMutationTestHook) {
+      await sessionMutationTestHook('cancelSession', { sessionId });
+    }
+
+    await database.transaction(
+      'rw',
+      [database.sessions, database.soapNotes, database.vaultMeta],
+      async () => {
+        const latestSessionEntity = await database.sessions.get(sessionId);
+        if (!latestSessionEntity) {
+          throw new StaleTabOverwriteError(
+            'تم حذف الجلسة في تبويب آخر (Changed in another tab).'
+          );
+        }
+        if (
+          latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
+          !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv)
+        ) {
+          throw new StaleTabOverwriteError(
+            'تم تعديل أو اعتماد الجلسة في تبويب آخر أثناء محاولة الإلغاء (Changed in another tab).'
+          );
+        }
+
+        const latestSoapEntity = await database.soapNotes
+          .where('sessionId')
+          .equals(sessionId)
+          .first();
+        if (baselineSoapUpdatedAt !== undefined) {
+          if (
+            !latestSoapEntity ||
+            latestSoapEntity.updatedAt !== baselineSoapUpdatedAt ||
+            (baselineSoapIv && !areUint8ArraysEqual(latestSoapEntity.iv, baselineSoapIv))
+          ) {
+            throw new StaleTabOverwriteError(
+              'تم تعديل أو اعتماد ملاحظة SOAP المرتبطة بهذه الجلسة في تبويب آخر أثناء محاولة الإلغاء (Changed in another tab).'
+            );
+          }
+        } else if (latestSoapEntity) {
+          throw new StaleTabOverwriteError(
+            'تم إنشاء أو اعتماد ملاحظة SOAP لهذه الجلسة في تبويب آخر أثناء محاولة الإلغاء (Changed in another tab).'
+          );
+        }
+
+        await database.sessions.put(entity);
+      }
+    );
 
     return {
       id: sessionId,
@@ -814,20 +1107,31 @@ export class SessionService {
 
   /**
    * Finalize a Clinical Session and its associated SOAP Note atomically in ONE Dexie transaction.
-   * Strictly enforces:
-   * 1. Attended sessions MUST have a completed SOAP note before finalization.
-   * 2. Subjective chief complaint, Objective findings/flowsheet, Assessment impression, and Plan must be filled.
-   * 3. Computes SHA-256 content integrity digests and AES-256-GCM ciphertexts BEFORE opening the Dexie transaction.
-   * 4. Commits both `soapNote.isFinalized = true` and `session.status = 'finalized'` in ONE atomic Dexie transaction.
+   * Single finalization path in the codebase:
+   * 1. Attended sessions MUST have a completed SOAP note with:
+   *    - Pre-session pain & post-session pain recorded (or explicitly marked `painNotRecorded` / `postPainNotRecorded`)
+   *    - At least one documented intervention (flowsheet item or free-text summary/observation)
+   *    - Non-empty `clinicalImpressionCurrent`
+   *    - Selected `progressStatus`
+   * 2. Computes canonical SHA-256 content integrity digests over the EXACT finalized payloads
+   *    (excluding the digest field itself) and AES-256-GCM ciphertexts BEFORE opening the Dexie transaction.
+   * 3. Re-reads and verifies `updatedAt`, `iv`, finalized flags, and 1:1 SOAP constraint INSIDE the `rw` transaction
+   *    before committing both `soapNote.isFinalized = true` and `session.status = 'finalized'`.
+   *
+   * Note on `therapistName`: This is a self-declared active staff label ("Recorded by") from the local app,
+   * NOT a cryptographically authenticated identity.
    */
   static async finalizeSession(
     sessionId: string,
     therapistName: string,
     dek: CryptoKey,
-    database: PhysioRecordDatabase = defaultDb
+    database: PhysioRecordDatabase = defaultDb,
+    expectedSessionUpdatedAt?: string,
+    expectedSoapUpdatedAt?: string,
+    legacyReviewConfirmed = false
   ): Promise<SessionRecord> {
     if (!therapistName?.trim()) {
-      throw new Error('اسم المعالج الطبيعي المعتمد إلزامي لاعتماد السجل السريري.');
+      throw new Error('اسم المعالج المسجّل (Recorded by) إلزامي لاعتماد السجل السريري.');
     }
 
     const expectedGen = getDekGeneration(dek);
@@ -835,6 +1139,11 @@ export class SessionService {
       throw new UnboundVaultKeyError(
         'تم رفض اعتماد الجلسة: مفتاح التشفير التشغيلي (DEK) غير مرتبط بأي جيل خزينة معتمد.'
       );
+    }
+
+    const sessionEntityPre = await database.sessions.get(sessionId);
+    if (!sessionEntityPre) {
+      throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
     }
 
     const session = await this.getSessionById(sessionId, dek, database);
@@ -846,16 +1155,45 @@ export class SessionService {
       throw new Error('هذه الجلسة معتمدة مسبقاً.');
     }
 
+    if (
+      expectedSessionUpdatedAt !== undefined &&
+      session.updatedAt !== expectedSessionUpdatedAt
+    ) {
+      throw new StaleTabOverwriteError(
+        'تم تعديل الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+      );
+    }
+
+    const baselineSessionUpdatedAt = expectedSessionUpdatedAt ?? session.updatedAt;
+    const baselineSessionIv = sessionEntityPre.iv;
+    let baselineSoapUpdatedAt: string | undefined;
+    let baselineSoapIv: Uint8Array | undefined;
+
     const now = new Date().toISOString();
     const signer = therapistName.trim();
     const meta = await database.vaultMeta.get('auth');
     const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
 
-    let soapDigest = '';
+    let finalizedSoapDigestSha256: string | null = null;
     let finalizedSoapEntity: EncryptedSoapEntity | null = null;
 
-    // If attended, SOAP note is mandatory and ALL 4 AXES must be addressed!
+    // If attended, SOAP note is mandatory and required clinical fields must be documented
     if (session.attendanceStatus === 'attended') {
+      const soapEntities = await database.soapNotes
+        .where('sessionId')
+        .equals(sessionId)
+        .toArray();
+      if (soapEntities.length === 0) {
+        throw new Error(
+          'لا يمكن اعتماد الجلسة السريرية: يجب توثيق وإكمال ملاحظة SOAP أولاً للجلسات التي حضرها المريض.'
+        );
+      }
+      if (soapEntities.length > 1) {
+        throw new StaleTabOverwriteError(
+          'تعارض 1:1 في ملاحظات SOAP للجلسة عبر التبويبات (Changed in another tab).'
+        );
+      }
+
       const soap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
       if (!soap) {
         throw new Error(
@@ -863,12 +1201,49 @@ export class SessionService {
         );
       }
 
-      // 1. Check Axis S (Subjective): Chief Complaint is mandatory
-      if (!soap.data.subjective?.chiefComplaint?.trim()) {
-        throw new Error('الشكوى الحالية للمريض (Chief Complaint) إلزامية في محور S لاعتماد الجلسة.');
+      if (soap.data.isFinalized) {
+        throw new Error('ملاحظة SOAP المرتبطة بهذه الجلسة معتمدة مسبقاً.');
       }
 
-      // 2. Check Axis O (Objective): Must document findings, flowsheet, or explicitly justify not_assessed
+      if (
+        expectedSoapUpdatedAt !== undefined &&
+        soap.updatedAt !== expectedSoapUpdatedAt
+      ) {
+        throw new StaleTabOverwriteError(
+          'تم تعديل ملاحظة SOAP في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+        );
+      }
+      baselineSoapUpdatedAt = expectedSoapUpdatedAt ?? soap.updatedAt;
+      baselineSoapIv = soapEntities[0].iv;
+
+      // Service-level Legacy Draft Review Gate (Finding 1):
+      // Reject finalizing a note with legacyUnreviewed === true unless legacyReviewConfirmed is explicitly passed.
+      const isLegacyUnreviewedNote = Boolean(soap.data.legacyUnreviewed);
+      if (isLegacyUnreviewedNote && !legacyReviewConfirmed) {
+        throw new Error(
+          'لا يمكن اعتماد وقفل هذه المسودة السريرية المنشأة بإصدار سابق قبل تأكيد مراجعتها صراحةً (legacyReviewConfirmed is required).'
+        );
+      }
+
+      const sub = soap.data.subjective;
+      const hasPrePain =
+        sub?.painNrsScore !== undefined || sub?.painNotRecorded === true;
+      // Finding 4: Removed soapSchemaVersion === 1 bypass; post-session pain or explicit postPainNotRecorded is always required.
+      const hasPostPain =
+        sub?.postSessionPainNrs !== undefined || sub?.postPainNotRecorded === true;
+
+      if (!hasPrePain) {
+        throw new Error(
+          'يجب تسجيل شدة الألم قبل الجلسة (أو تحديد "لم يُسجّل") قبل اعتماد وقفل الجلسة.'
+        );
+      }
+      if (!hasPostPain) {
+        throw new Error(
+          'يجب تسجيل شدة الألم بعد الجلسة (أو تحديد "لم يُسجّل") قبل اعتماد وقفل الجلسة.'
+        );
+      }
+
+      // Check documented intervention or objective finding
       const obj = soap.data.objective;
       const hasFlowsheetItems = Boolean(
         obj?.flowsheet &&
@@ -878,10 +1253,10 @@ export class SessionService {
       );
       const hasObjectiveFindings = Boolean(
         hasFlowsheetItems ||
+          obj?.dailyInterventionsSummary?.trim() ||
           obj?.objectiveFindings?.trim() ||
           obj?.clinicalObservations?.trim() ||
           obj?.functionalOrPreliminaryMeasurements?.trim() ||
-          obj?.dailyInterventionsSummary?.trim() ||
           (obj?.romBattery?.entries && obj.romBattery.entries.length > 0) ||
           (obj?.mmtBattery?.entries && obj.mmtBattery.entries.length > 0) ||
           (obj?.neuroScreening &&
@@ -896,33 +1271,46 @@ export class SessionService {
 
       if (!hasObjectiveFindings && !isExplicitlyNotAssessed) {
         throw new Error(
-          'محور الفحص والملاحظات الموضوعية (Objective — O) إلزامي لاعتماد الجلسة. يجب تدوين نتائج الفحص السريري أو تحديد حالة "لم يتم إجراء فحص موضوعي" مع تسجيل السبب السريري المبرر.'
+          'يجب توثيق تدخل علاجي واحد على الأقل (تمرين، علاج يدوي، جهاز، أو ملخص تدخلات/ملاحظات موضوعية) قبل اعتماد وقفل الجلسة.'
         );
       }
 
-      // 3. Check Axis A (Assessment): Clinical Impression is mandatory
+      // Check Axis A (Assessment): Clinical Impression and Progress Status are mandatory
       if (!soap.data.assessment?.clinicalImpressionCurrent?.trim()) {
-        throw new Error('الانطباع والتفسير السريري (Clinical Impression) إلزامي في محور A لاعتماد الجلسة.');
+        throw new Error(
+          'الانطباع والتفسير السريري (Clinical Impression) إلزامي في محور A لاعتماد الجلسة.'
+        );
+      }
+      if (!soap.data.assessment?.progressStatus) {
+        throw new Error(
+          'تحديد مسار تقدم الحالة (Progress Status) إلزامي في محور A لاعتماد الجلسة.'
+        );
       }
 
-      // 4. Check Axis P (Plan): Next Session Plan is mandatory
-      if (!soap.data.plan?.nextSessionPlan?.trim()) {
-        throw new Error('الخطة للجلسة القادمة (Next Session Plan) إلزامية في محور P لاعتماد الجلسة.');
-      }
-
-      // Prepare finalized SOAP payload and compute SHA-256 content seal BEFORE opening Dexie transaction
+      // Prepare exact finalized SOAP payload and compute canonical SHA-256 content seal (excluding contentDigestSha256)
       const soapContentForSeal: SoapNoteData = {
         ...soap.data,
-        soapSchemaVersion: soap.data.soapSchemaVersion ?? CURRENT_SOAP_SCHEMA_VERSION,
+        soapSchemaVersion: CURRENT_SOAP_SCHEMA_VERSION,
         isFinalized: true,
         finalizedAt: now,
         finalizedBy: signer,
+        sealVersion: CURRENT_SEAL_VERSION,
       };
-      const soapContentSeal = await computeSha256Digest(JSON.stringify(soapContentForSeal));
+      if (isLegacyUnreviewedNote && legacyReviewConfirmed) {
+        soapContentForSeal.legacyUnreviewed = false;
+        soapContentForSeal.legacyReviewedAt = now;
+        soapContentForSeal.legacyReviewedBy = signer;
+      }
+      delete soapContentForSeal.contentDigestSha256;
+
+      const soapContentSeal = await computeSha256Digest(
+        canonicalizeForSeal(soapContentForSeal, ['contentDigestSha256'])
+      );
       const finalizedSoapData: SoapNoteData = {
         ...soapContentForSeal,
         contentDigestSha256: soapContentSeal,
       };
+      finalizedSoapDigestSha256 = soapContentSeal;
 
       const { iv: soapIv, ciphertext: soapCiphertext } =
         await encryptRecordWithMandatoryReservation(
@@ -949,21 +1337,31 @@ export class SessionService {
         iv: soapIv,
         ciphertext: soapCiphertext,
       };
-
-      soapDigest = JSON.stringify(finalizedSoapData);
     }
 
-    // Compute content integrity digest (SHA-256 cryptographic digest across session and SOAP payloads)
-    const contentToDigest = `${JSON.stringify(session.data)}::${soapDigest}`;
-    const digestHex = await computeSha256Digest(contentToDigest);
-
-    const finalizedData: SessionClinicalData = {
+    // Build exact finalized session payload (excluding contentIntegrityDigestSha256) and compute canonical seal
+    const finalizedSessionBase: SessionClinicalData = {
       ...session.data,
       status: 'finalized',
       finalizedAt: now,
       finalizedBy: signer,
       attestationByTherapistName: signer,
       attestationTimestamp: now,
+      sealVersion: CURRENT_SEAL_VERSION,
+    };
+    delete finalizedSessionBase.contentIntegrityDigestSha256;
+
+    const canonicalSessionEnvelope = canonicalizeForSeal({
+      session: canonicalizeObjectExcluding(
+        finalizedSessionBase,
+        new Set(['contentIntegrityDigestSha256'])
+      ),
+      soapDigestSha256: finalizedSoapDigestSha256,
+    });
+    const digestHex = await computeSha256Digest(canonicalSessionEnvelope);
+
+    const finalizedData: SessionClinicalData = {
+      ...finalizedSessionBase,
       contentIntegrityDigestSha256: digestHex,
     };
 
@@ -991,9 +1389,9 @@ export class SessionService {
       ciphertext,
     };
 
-    // ATOMIC SINGLE-TRANSACTION COMMIT:
+    // ATOMIC SINGLE-TRANSACTION RE-READ, CONCURRENCY CHECK & COMMIT:
     // Both soapNote (isFinalized = true + seal + signer) and session (status = 'finalized')
-    // are committed together in ONE Dexie readwrite transaction.
+    // are verified and committed together in ONE Dexie readwrite transaction.
     await database.transaction(
       'rw',
       [database.sessions, database.soapNotes, database.vaultMeta],
@@ -1005,9 +1403,36 @@ export class SessionService {
             `تم رفض اعتماد الجلسة: تغير جيل الخزينة (${expectedGen} != ${currentGen}) أثناء العملية.`
           );
         }
+
+        const latestSessionEntity = await database.sessions.get(sessionId);
+        if (
+          !latestSessionEntity ||
+          latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
+          !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv)
+        ) {
+          throw new StaleTabOverwriteError(
+            'تم تعديل أو اعتماد الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+          );
+        }
+
         if (finalizedSoapEntity) {
+          const latestSoapList = await database.soapNotes
+            .where('sessionId')
+            .equals(sessionId)
+            .toArray();
+          if (
+            latestSoapList.length !== 1 ||
+            latestSoapList[0].id !== finalizedSoapEntity.id ||
+            latestSoapList[0].updatedAt !== baselineSoapUpdatedAt ||
+            (baselineSoapIv && !areUint8ArraysEqual(latestSoapList[0].iv, baselineSoapIv))
+          ) {
+            throw new StaleTabOverwriteError(
+              'تم تعديل أو اعتماد ملاحظة SOAP في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+            );
+          }
           await database.soapNotes.put(finalizedSoapEntity);
         }
+
         await database.sessions.put(entity);
       }
     );
@@ -1028,16 +1453,34 @@ export class SessionService {
   }
 
   /**
-   * Idempotent repair routine (runs after unlock):
-   * Finds any sessions with `status === 'finalized'` whose associated `soapNote.data.isFinalized` is false
-   * (caused by the pre-Phase-1A TreatmentSessionView bug), finalizes the SOAP note using the session's
-   * recorded signer/timestamp, and marks `repairedDuringMigration: true` + `repairedAt` for honesty.
-   * All crypto is computed BEFORE opening the Dexie transaction.
+   * Idempotent repair routine (wired to run after unlock in VaultContext):
+   * - Checks `migrationState` (`id: HALF_FINALIZED_REPAIR_STATE_ID`) first; if a clean repair run already
+   *   completed for the CURRENT `vaultGeneration` (`status === 'completed' && vaultGeneration === expectedGen`),
+   *   returns immediately without decrypting every session on every unlock.
+   *   (Restoring a `.ptbackup` both increments `vaultGeneration` and clears this `migrationState` record so
+   *   restored half-finalized sessions are always repaired on unlock.)
+   * - Finds any sessions with `status === 'finalized'` whose associated `soapNote.data.isFinalized` is false
+   *   (caused by the pre-Phase-1A TreatmentSessionView bug), finalizes the SOAP note using the session's
+   *   recorded signer/timestamp, and marks `repairedDuringMigration: true`, `legacyUnreviewed: true`, and `repairedAt`.
+   * - Pre-1A-i.5 notes may contain auto-generated default values (e.g. pain 5->3, progressStatus 'improved'):
+   *   `contentDigestSha256` and `sealVersion` are omitted (`status: 'unsealed'`) and `legacyUnreviewed: true` is set.
+   * - Computes all crypto BEFORE opening the Dexie transaction.
+   * - Inside the transaction: if one note is stale (`updatedAt` or `iv` changed concurrently in another tab),
+   *   does NOT roll back the entire batch — commits the valid ones, skips and reports the stale ones
+   *   (`{ repairedCount, skippedCount, repairedSessionIds, skippedSessionIds }`), and only marks `migrationState`
+   *   as `'completed'` when `skippedCount === 0`.
    */
   static async repairHalfFinalizedSessions(
     dek: CryptoKey,
     database: PhysioRecordDatabase = defaultDb
-  ): Promise<{ repairedCount: number; repairedSessionIds: string[] }> {
+  ): Promise<{
+    repairedCount: number;
+    skippedCount: number;
+    repairedSessionIds: string[];
+    repairedSessions: Array<{ sessionId: string; episodeId: string; patientId: string }>;
+    skippedSessionIds: string[];
+    alreadyCompleted?: boolean;
+  }> {
     const expectedGen = getDekGeneration(dek);
     if (expectedGen === undefined) {
       throw new UnboundVaultKeyError(
@@ -1045,13 +1488,36 @@ export class SessionService {
       );
     }
 
+    const existingRepairState = await database.migrationState.get(HALF_FINALIZED_REPAIR_STATE_ID);
+    if (
+      existingRepairState?.status === 'completed' &&
+      existingRepairState.vaultGeneration === expectedGen
+    ) {
+      return {
+        repairedCount: 0,
+        skippedCount: 0,
+        repairedSessionIds: [],
+        repairedSessions: [],
+        skippedSessionIds: [],
+        alreadyCompleted: true,
+      };
+    }
+
     const meta = await database.vaultMeta.get('auth');
     const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
     const allSessionEntities = await database.sessions.toArray();
 
-    const stagedSoapRepairs: EncryptedSoapEntity[] = [];
-    const repairedSessionIds: string[] = [];
+    const stagedSoapRepairs: Array<{
+      entity: EncryptedSoapEntity;
+      baselineUpdatedAt: string;
+      baselineIv: Uint8Array;
+      sessionId: string;
+      episodeId: string;
+      patientId: string;
+    }> = [];
     const repairedAt = new Date().toISOString();
+    let decryptSkippedCount = 0;
+    const skippedSessionIds: string[] = [];
 
     for (const sEntity of allSessionEntities) {
       let sData: SessionClinicalData;
@@ -1067,12 +1533,27 @@ export class SessionService {
           sEntity.dekVersion || CURRENT_DEK_VERSION
         );
       } catch {
+        decryptSkippedCount++;
+        skippedSessionIds.push(sEntity.id);
         continue;
       }
 
       if (sData.status !== 'finalized') continue;
 
-      const soap = await SoapService.getSoapNoteBySession(sEntity.id, dek, database);
+      const rawSoapEntity = await database.soapNotes
+        .where('sessionId')
+        .equals(sEntity.id)
+        .first();
+      if (!rawSoapEntity) continue;
+
+      let soap;
+      try {
+        soap = await SoapService.getSoapNoteBySession(sEntity.id, dek, database);
+      } catch {
+        decryptSkippedCount++;
+        skippedSessionIds.push(sEntity.id);
+        continue;
+      }
       if (!soap || soap.data.isFinalized) continue;
 
       const recordedSigner =
@@ -1083,7 +1564,8 @@ export class SessionService {
       const recordedFinalizedAt =
         sData.finalizedAt || sData.attestationTimestamp || sEntity.updatedAt || repairedAt;
 
-      const repairedBase: SoapNoteData = {
+      // Do NOT compute contentDigestSha256 or sealVersion on repaired legacy notes (Finding 3c)
+      const repairedSoapData: SoapNoteData = {
         ...soap.data,
         soapSchemaVersion: soap.data.soapSchemaVersion ?? CURRENT_SOAP_SCHEMA_VERSION,
         isFinalized: true,
@@ -1091,12 +1573,10 @@ export class SessionService {
         finalizedBy: recordedSigner,
         repairedDuringMigration: true,
         repairedAt,
+        legacyUnreviewed: true,
       };
-      const seal = await computeSha256Digest(JSON.stringify(repairedBase));
-      const repairedSoapData: SoapNoteData = {
-        ...repairedBase,
-        contentDigestSha256: seal,
-      };
+      delete repairedSoapData.contentDigestSha256;
+      delete repairedSoapData.sealVersion;
 
       const { iv: newIv, ciphertext: newCiphertext } =
         await encryptRecordWithMandatoryReservation(
@@ -1112,22 +1592,33 @@ export class SessionService {
         );
 
       stagedSoapRepairs.push({
-        id: soap.id,
-        sessionId: soap.sessionId,
-        episodeId: soap.episodeId,
-        patientId: soap.patientId,
-        createdAt: soap.createdAt,
-        updatedAt: repairedAt,
-        recordCryptoVersion: CURRENT_RECORD_CRYPTO_VERSION,
-        dekVersion: activeDekVersion,
-        iv: newIv,
-        ciphertext: newCiphertext,
+        entity: {
+          id: soap.id,
+          sessionId: soap.sessionId,
+          episodeId: soap.episodeId,
+          patientId: soap.patientId,
+          createdAt: soap.createdAt,
+          updatedAt: repairedAt,
+          recordCryptoVersion: CURRENT_RECORD_CRYPTO_VERSION,
+          dekVersion: activeDekVersion,
+          iv: newIv,
+          ciphertext: newCiphertext,
+        },
+        baselineUpdatedAt: rawSoapEntity.updatedAt,
+        baselineIv: rawSoapEntity.iv,
+        sessionId: sEntity.id,
+        episodeId: sEntity.episodeId,
+        patientId: sEntity.patientId,
       });
-      repairedSessionIds.push(sEntity.id);
     }
 
-    if (stagedSoapRepairs.length > 0) {
-      await database.transaction('rw', [database.soapNotes, database.vaultMeta], async () => {
+    const committedSessionIds: string[] = [];
+    const committedSessions: Array<{ sessionId: string; episodeId: string; patientId: string }> = [];
+
+    await database.transaction(
+      'rw',
+      [database.soapNotes, database.vaultMeta, database.migrationState],
+      async () => {
         const currentMeta = await database.vaultMeta.get('auth');
         const currentGen = currentMeta?.vaultGeneration ?? 1;
         if (currentGen !== expectedGen) {
@@ -1135,25 +1626,85 @@ export class SessionService {
             `تم رفض حفظ إصلاح الملاحظات السريرية: تغير جيل الخزينة (${expectedGen} != ${currentGen}).`
           );
         }
-        await database.soapNotes.bulkPut(stagedSoapRepairs);
-      });
-    }
+
+        const verifiedEntitiesToPut: EncryptedSoapEntity[] = [];
+        for (const item of stagedSoapRepairs) {
+          const currentSoap = await database.soapNotes.get(item.entity.id);
+          if (
+            !currentSoap ||
+            currentSoap.updatedAt !== item.baselineUpdatedAt ||
+            !areUint8ArraysEqual(currentSoap.iv, item.baselineIv)
+          ) {
+            // Do NOT roll back the whole batch: skip the stale note and report it
+            skippedSessionIds.push(item.sessionId);
+            continue;
+          }
+          verifiedEntitiesToPut.push(item.entity);
+          committedSessionIds.push(item.sessionId);
+          committedSessions.push({
+            sessionId: item.sessionId,
+            episodeId: item.episodeId,
+            patientId: item.patientId,
+          });
+        }
+
+        if (verifiedEntitiesToPut.length > 0) {
+          await database.soapNotes.bulkPut(verifiedEntitiesToPut);
+        }
+
+        const totalSkipped = skippedSessionIds.length;
+        const previousState = await database.migrationState.get(HALF_FINALIZED_REPAIR_STATE_ID);
+        const cumulativeRepaired =
+          (previousState?.repairedSoapNotesCount || 0) + committedSessionIds.length;
+
+        await database.migrationState.put({
+          id: HALF_FINALIZED_REPAIR_STATE_ID,
+          status: totalSkipped === 0 ? 'completed' : 'pending',
+          vaultGeneration: expectedGen,
+          completedKeyHashes: committedSessionIds,
+          failedKeyCount: totalSkipped,
+          repairedSoapNotesCount: cumulativeRepaired,
+          conflictCount: totalSkipped - decryptSkippedCount,
+          orphanFlowsheetCount: 0,
+          updatedAt: repairedAt,
+        });
+      }
+    );
 
     return {
-      repairedCount: stagedSoapRepairs.length,
-      repairedSessionIds,
+      repairedCount: committedSessionIds.length,
+      skippedCount: skippedSessionIds.length,
+      repairedSessionIds: committedSessionIds,
+      repairedSessions: committedSessions,
+      skippedSessionIds,
     };
   }
 
   /**
    * Delete a draft session atomically with its child draft SOAP notes.
-   * Strictly rejects deletion of finalized sessions and finalized SOAP notes.
+   * Strictly rejects deletion of finalized sessions, finalized SOAP notes, or sessions with addenda,
+   * and re-verifies `updatedAt`, `iv`, and `clinicalAddenda.count()` inside ONE `rw` transaction.
    */
   static async deleteSession(
     sessionId: string,
     dek: CryptoKey,
-    database: PhysioRecordDatabase = defaultDb
+    database: PhysioRecordDatabase = defaultDb,
+    expectedUpdatedAt?: string
   ): Promise<void> {
+    const existingEntity = await database.sessions.get(sessionId);
+    if (!existingEntity) {
+      throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
+    }
+
+    if (expectedUpdatedAt !== undefined && existingEntity.updatedAt !== expectedUpdatedAt) {
+      throw new StaleTabOverwriteError(
+        'تم تعديل الجلسة في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة.'
+      );
+    }
+
+    const baselineSessionUpdatedAt = expectedUpdatedAt ?? existingEntity.updatedAt;
+    const baselineSessionIv = existingEntity.iv;
+
     const session = await this.getSessionById(sessionId, dek, database);
     if (!session) {
       throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
@@ -1165,7 +1716,7 @@ export class SessionService {
       );
     }
 
-    // Append-only integrity: verify no clinical addenda exist for this session
+    // Append-only integrity pre-check: verify no clinical addenda exist for this session
     const addendaCount = await database.clinicalAddenda.where('sessionId').equals(sessionId).count();
     if (addendaCount > 0) {
       throw new CannotDeleteFinalizedRecordError(
@@ -1174,6 +1725,13 @@ export class SessionService {
     }
 
     // Check if the associated SOAP note is finalized
+    const existingSoapEntity = await database.soapNotes
+      .where('sessionId')
+      .equals(sessionId)
+      .first();
+    const baselineSoapUpdatedAt = existingSoapEntity?.updatedAt;
+    const baselineSoapIv = existingSoapEntity?.iv;
+
     const soap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
     if (soap && soap.data.isFinalized) {
       throw new CannotDeleteFinalizedRecordError(
@@ -1181,7 +1739,64 @@ export class SessionService {
       );
     }
 
-    await database.deleteSessionCascade(sessionId);
+    if (sessionMutationTestHook) {
+      await sessionMutationTestHook('deleteSession', { sessionId });
+    }
+
+    await database.transaction(
+      'rw',
+      [database.sessions, database.soapNotes, database.clinicalAddenda],
+      async () => {
+        const latestSessionEntity = await database.sessions.get(sessionId);
+        if (!latestSessionEntity) {
+          return;
+        }
+        if (
+          latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
+          !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv)
+        ) {
+          throw new StaleTabOverwriteError(
+            'تم تعديل أو اعتماد الجلسة في تبويب آخر أثناء محاولة الحذف (Changed in another tab).'
+          );
+        }
+
+        const latestSoapList = await database.soapNotes
+          .where('sessionId')
+          .equals(sessionId)
+          .toArray();
+        if (baselineSoapUpdatedAt !== undefined) {
+          if (
+            latestSoapList.length !== 1 ||
+            latestSoapList[0].updatedAt !== baselineSoapUpdatedAt ||
+            (baselineSoapIv && !areUint8ArraysEqual(latestSoapList[0].iv, baselineSoapIv))
+          ) {
+            throw new StaleTabOverwriteError(
+              'تم تعديل أو اعتماد ملاحظة SOAP المرتبطة بالجلسة في تبويب آخر أثناء محاولة الحذف (Changed in another tab).'
+            );
+          }
+        } else if (latestSoapList.length > 0) {
+          throw new StaleTabOverwriteError(
+            'تم إنشاء أو اعتماد ملاحظة SOAP لهذه الجلسة في تبويب آخر أثناء محاولة الحذف (Changed in another tab).'
+          );
+        }
+
+        const inTxAddendaCount = await database.clinicalAddenda
+          .where('sessionId')
+          .equals(sessionId)
+          .count();
+        if (inTxAddendaCount > 0) {
+          throw new CannotDeleteFinalizedRecordError(
+            'لا يمكن حذف الجلسة: توجد ملاحق سريرية (Clinical Addenda) مرتبطة بها.'
+          );
+        }
+
+        if (latestSoapList.length > 0) {
+          await database.soapNotes.bulkDelete(latestSoapList.map((n) => n.id));
+        }
+        await database.sessions.delete(sessionId);
+      }
+    );
+
     await this.releaseSessionNumber(session.episodeId, session.sessionNumber, dek, database);
   }
 }

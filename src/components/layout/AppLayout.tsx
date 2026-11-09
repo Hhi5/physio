@@ -8,6 +8,7 @@ import React, { useState } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { usePatients } from '../../context/PatientContext';
 import { useTheme } from '../../context/ThemeContext';
+import { useVault } from '../../context/VaultContext';
 import { Sidebar, type MainClinicNavView } from './Sidebar';
 import { PatientDirectory } from '../PatientDirectory';
 import { PatientWorkspace } from '../workspace/PatientWorkspace';
@@ -33,6 +34,9 @@ import {
   Calendar,
   Wallet,
   Dumbbell,
+  ShieldCheck,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
@@ -40,6 +44,7 @@ export const AppLayout: React.FC = () => {
   const isAr = language === 'ar';
   const { patients } = usePatients();
   const { theme, toggleTheme } = useTheme();
+  const { lastRepairSummary, repairError, dismissRepairNotice } = useVault();
 
   const [activeNavView, setActiveNavView] = useState<MainClinicNavView>('patients');
   const [selectedPatient, setSelectedPatient] = useState<PatientRecord | null>(null);
@@ -166,6 +171,87 @@ export const AppLayout: React.FC = () => {
 
       {/* Main Content Area (with bottom padding on mobile so Fixed Bottom Tab Bar never overlaps) */}
       <main className="flex-1 flex flex-col h-full overflow-hidden bg-slate-50 dark:bg-slate-950 relative pb-16 md:pb-0">
+        {(repairError ||
+          (lastRepairSummary &&
+            (lastRepairSummary.repairedCount > 0 || lastRepairSummary.skippedCount > 0))) && (
+          <div
+            className={`px-4 py-2.5 border-b text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0 ${
+              repairError
+                ? 'bg-rose-50 dark:bg-rose-950/70 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200'
+                : 'bg-amber-50 dark:bg-amber-950/60 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+            }`}
+          >
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 font-bold">
+                {repairError ? (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                ) : (
+                  <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                )}
+                <span>
+                  {repairError
+                    ? isAr
+                      ? `تنبيه إصلاح السجلات السريرية عند فتح الخزينة: ${repairError}`
+                      : `Vault unlock repair warning: ${repairError}`
+                    : isAr
+                      ? `إشعار مزامنة السجلات السريرية: تم إصلاح قفل الاعتماد لـ (${lastRepairSummary?.repairedCount ?? 0}) ملاحظة SOAP مرتبطة بجلسات معتمدة${
+                          lastRepairSummary && lastRepairSummary.skippedCount > 0
+                            ? `، وتم تخطي (${lastRepairSummary.skippedCount}) سجل لتعديله المتزامن (سيتم إعادة المحاولة عند الفتح القادم).`
+                            : '.'
+                        }`
+                      : `Clinical record lock repair: Synchronized finalization lock for (${lastRepairSummary?.repairedCount ?? 0}) SOAP note(s)${
+                          lastRepairSummary && lastRepairSummary.skippedCount > 0
+                            ? `, and skipped (${lastRepairSummary.skippedCount}) concurrently modified record(s) for retry on next unlock.`
+                            : '.'
+                        }`}
+                </span>
+              </div>
+              {!repairError &&
+                lastRepairSummary &&
+                lastRepairSummary.repairedSessionIds.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 ps-6">
+                    <span className="text-[11px] font-semibold opacity-90">
+                      {isAr ? 'الجلسات التي تم إصلاح قفلها (اضغط للمراجعة):' : 'Repaired sessions (click to review):'}
+                    </span>
+                    {(lastRepairSummary.repairedSessions && lastRepairSummary.repairedSessions.length > 0
+                      ? lastRepairSummary.repairedSessions
+                      : lastRepairSummary.repairedSessionIds.map((sessionId) => ({
+                          sessionId,
+                          episodeId: '',
+                          patientId: '',
+                        }))
+                    ).map((item) => (
+                      <button
+                        key={item.sessionId}
+                        type="button"
+                        onClick={() => {
+                          if (item.patientId) {
+                            handleSelectPatientById(item.patientId);
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-amber-200/70 dark:bg-amber-900/70 hover:bg-amber-300 dark:hover:bg-amber-800 text-amber-950 dark:text-amber-100 font-mono text-[11px] font-bold underline decoration-dotted cursor-pointer"
+                        title={
+                          isAr
+                            ? `فتح ملف المريض لمراجعة الجلسة ${item.sessionId}`
+                            : `Open patient workspace to review session ${item.sessionId}`
+                        }
+                      >
+                        #{item.sessionId}
+                      </button>
+                    ))}
+                  </div>
+                )}
+            </div>
+            <button
+              type="button"
+              onClick={dismissRepairNotice}
+              className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer shrink-0 self-end sm:self-center"
+              aria-label="Dismiss repair notice"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         {selectedPatient ? (
           <PatientWorkspace
             patient={selectedPatient}

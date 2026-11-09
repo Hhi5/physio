@@ -224,7 +224,8 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const getAddenda = useCallback(
     async (sessionId: string): Promise<ClinicalAddendumRecord[]> => {
       if (isLockedRef.current || !dekRef.current) throw new Error('الخزينة مقفلة');
-      return SoapService.getAddendaBySession(sessionId, dekRef.current);
+      const res = await SoapService.getAddendaBySession(sessionId, dekRef.current);
+      return res.records;
     },
     []
   );

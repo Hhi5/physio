@@ -19,6 +19,63 @@ import type {
   ClinicExpenseIQD,
 } from '../types/clinicManagement';
 import { localDate } from '../utils/date';
+import { canonicalizeForSeal } from './sessionService';
+import { db as defaultDb, type PhysioRecordDatabase } from '../db/db';
+import {
+  encryptRecordWithMandatoryReservation,
+  decryptRecordPayload,
+  CURRENT_DEK_VERSION,
+  CURRENT_RECORD_CRYPTO_VERSION,
+} from '../crypto/vault';
+import {
+  StaleTabOverwriteError,
+  type EncryptedEpisodeClinicalEntity,
+} from '../types/clinical';
+
+function areUint8ArraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+export function assertAppendOnlySnapshots(
+  existingSnapshots: ClinicalAssessmentSnapshot[],
+  incomingSnapshots: ClinicalAssessmentSnapshot[]
+): void {
+  if (incomingSnapshots.length < existingSnapshots.length) {
+    throw new Error(
+      'رفض حفظ التقييم: لقطات التقييم المرحلية (Snapshots) هي سجل تراكمي غير قابل للحذف بعد إنشائه (Append-only Snapshots).'
+    );
+  }
+
+  for (let i = 0; i < existingSnapshots.length; i++) {
+    const prevSnap = existingSnapshots[i];
+    const nextSnap = incomingSnapshots[i];
+    if (
+      !nextSnap ||
+      nextSnap.id !== prevSnap.id ||
+      canonicalizeForSeal(nextSnap) !== canonicalizeForSeal(prevSnap)
+    ) {
+      throw new Error(
+        `رفض حفظ التقييم: لا يمكن تعديل أو إعادة ترتيب لقطة التقييم المسجلة مسبقاً (${prevSnap.id}). اللقطات السريرية غير قابلة للتعديل بعد إنشائها (Append-only Snapshots).`
+      );
+    }
+  }
+}
+
+type EpisodeClinicalMutationTestHook = (context: {
+  episodeId: string;
+}) => Promise<void> | void;
+
+let episodeClinicalMutationTestHook: EpisodeClinicalMutationTestHook | null = null;
+
+export function setEpisodeClinicalMutationTestHook(
+  hook: EpisodeClinicalMutationTestHook | null
+): void {
+  episodeClinicalMutationTestHook = hook;
+}
 
 const STORAGE_KEYS = {
   ACTIVE_STAFF_ID: 'physiorecord_active_staff_v2',
@@ -435,6 +492,8 @@ export class ClinicOperationsService {
     actionType: AuditLogEntry['actionType'];
     entityType: AuditLogEntry['entityType'];
     entityId: string;
+    patientId?: string;
+    episodeId?: string;
     summaryAr: string;
     summaryEn: string;
   }): AuditLogEntry {
@@ -535,6 +594,20 @@ export class ClinicOperationsService {
 
   static saveEpisodeClinicalStore(store: EpisodeScopedClinicalStore): void {
     const epKey = `${STORAGE_KEYS.EPISODE_STORE_PREFIX}${store.episodeId}`;
+    const existingRaw = localStorage.getItem(epKey);
+    if (existingRaw) {
+      let existingParsed: EpisodeScopedClinicalStore | null = null;
+      try {
+        existingParsed = JSON.parse(existingRaw) as EpisodeScopedClinicalStore;
+      } catch {
+        existingParsed = null;
+      }
+      assertAppendOnlySnapshots(
+        existingParsed?.snapshots || [],
+        store.snapshots || []
+      );
+    }
+
     const updated: EpisodeScopedClinicalStore = {
       ...store,
       updatedAt: new Date().toISOString(),
@@ -544,9 +617,193 @@ export class ClinicOperationsService {
       actionType: 'evaluation_saved',
       entityType: 'episode',
       entityId: store.episodeId,
+      patientId: store.patientId,
+      episodeId: store.episodeId,
       summaryAr: `حفظ وتحديث التقييم السريري لحلقة الرعاية #${store.episodeId.slice(0, 6)}`,
       summaryEn: `Saved episode-scoped clinical assessment for episode #${store.episodeId.slice(0, 6)}`,
     });
+  }
+
+  /**
+   * Encrypted `db.episodeClinical` read helper.
+   * Falls back to `localStorage` only when no encrypted Dexie record exists yet.
+   */
+  static async getEpisodeClinicalStoreEncrypted(
+    episodeId: string,
+    patientId: string,
+    dek: CryptoKey,
+    database: PhysioRecordDatabase = defaultDb
+  ): Promise<EpisodeScopedClinicalStore> {
+    const existingEntity =
+      (await database.episodeClinical.get(episodeId)) ||
+      (await database.episodeClinical.where('episodeId').equals(episodeId).first());
+    if (existingEntity) {
+      return await decryptRecordPayload<EpisodeScopedClinicalStore>(
+        dek,
+        'episodeClinical',
+        existingEntity.id,
+        [existingEntity.episodeId],
+        existingEntity.iv,
+        existingEntity.ciphertext,
+        existingEntity.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+        existingEntity.dekVersion || CURRENT_DEK_VERSION
+      );
+    }
+    return this.getEpisodeClinicalStore(episodeId, patientId);
+  }
+
+  /**
+   * Encrypted `db.episodeClinical` write path with strict append-only snapshot enforcement (Item B):
+   * - Applies whether `localStorage` still has the key OR only the encrypted Dexie record exists.
+   * - Pre-reads & validates snapshots and computes encryption before opening the Dexie transaction.
+   * - Inside ONE `rw` transaction on `episodeClinical` + `vaultMeta`:
+   *   re-reads the existing record, compares `updatedAt` and `iv`, decrypts the stored record,
+   *   and rejects any deletion, reorder, or mutation of existing snapshots (`canonicalizeForSeal`)
+   *   before committing.
+   */
+  static async saveEpisodeClinicalStoreEncrypted(
+    store: EpisodeScopedClinicalStore,
+    dek: CryptoKey,
+    database: PhysioRecordDatabase = defaultDb,
+    expectedUpdatedAt?: string
+  ): Promise<EncryptedEpisodeClinicalEntity> {
+    if (!store.episodeId || !store.patientId) {
+      throw new Error('معرّف حلقة الرعاية والمريض إلزاميان لحفظ سجل التقييم المشفر.');
+    }
+
+    // 1. Check any residual localStorage snapshots if the key still exists
+    const epKey = `${STORAGE_KEYS.EPISODE_STORE_PREFIX}${store.episodeId}`;
+    if (typeof localStorage !== 'undefined') {
+      const existingLsRaw = localStorage.getItem(epKey);
+      if (existingLsRaw) {
+        try {
+          const parsedLs = JSON.parse(existingLsRaw) as EpisodeScopedClinicalStore;
+          assertAppendOnlySnapshots(parsedLs.snapshots || [], store.snapshots || []);
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('Append-only Snapshots')) {
+            throw err;
+          }
+        }
+      }
+    }
+
+    // 2. Pre-read existing encrypted Dexie record before encrypting candidate payload
+    const preEntity =
+      (await database.episodeClinical.get(store.episodeId)) ||
+      (await database.episodeClinical.where('episodeId').equals(store.episodeId).first());
+
+    if (
+      expectedUpdatedAt !== undefined &&
+      preEntity &&
+      preEntity.updatedAt !== expectedUpdatedAt
+    ) {
+      throw new StaleTabOverwriteError(
+        'تم تعديل سجل تقييم حلقة الرعاية في تبويب آخر (Changed in another tab).'
+      );
+    }
+
+    if (preEntity) {
+      const preDecrypted = await decryptRecordPayload<EpisodeScopedClinicalStore>(
+        dek,
+        'episodeClinical',
+        preEntity.id,
+        [preEntity.episodeId],
+        preEntity.iv,
+        preEntity.ciphertext,
+        preEntity.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+        preEntity.dekVersion || CURRENT_DEK_VERSION
+      );
+      assertAppendOnlySnapshots(preDecrypted.snapshots || [], store.snapshots || []);
+    }
+
+    const baselineUpdatedAt = expectedUpdatedAt ?? preEntity?.updatedAt;
+    const baselineIv = preEntity?.iv;
+    const now = new Date().toISOString();
+    const createdAt = preEntity?.createdAt || now;
+
+    const payloadToEncrypt: EpisodeScopedClinicalStore = {
+      ...store,
+      updatedAt: now,
+    };
+
+    const meta = await database.vaultMeta.get('auth');
+    const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
+
+    const { iv, ciphertext } = await encryptRecordWithMandatoryReservation(
+      database,
+      dek,
+      'episodeClinical',
+      store.episodeId,
+      [store.episodeId],
+      payloadToEncrypt,
+      CURRENT_RECORD_CRYPTO_VERSION,
+      activeDekVersion
+    );
+
+    const candidateEntity: EncryptedEpisodeClinicalEntity = {
+      id: store.episodeId,
+      episodeId: store.episodeId,
+      patientId: store.patientId,
+      createdAt,
+      updatedAt: now,
+      recordCryptoVersion: CURRENT_RECORD_CRYPTO_VERSION,
+      dekVersion: activeDekVersion,
+      iv,
+      ciphertext,
+    };
+
+    if (episodeClinicalMutationTestHook) {
+      await episodeClinicalMutationTestHook({ episodeId: store.episodeId });
+    }
+
+    // 3. Inside ONE rw transaction: re-read existing record, compare updatedAt and iv,
+    //    decrypt, and reject any deletion, reorder, or mutation of existing snapshots (canonicalizeForSeal)
+    await database.transaction(
+      'rw',
+      [database.episodeClinical, database.vaultMeta],
+      async () => {
+        const currentEntity =
+          (await database.episodeClinical.get(store.episodeId)) ||
+          (await database.episodeClinical.where('episodeId').equals(store.episodeId).first());
+
+        if (preEntity) {
+          if (
+            !currentEntity ||
+            currentEntity.updatedAt !== baselineUpdatedAt ||
+            (baselineIv && !areUint8ArraysEqual(currentEntity.iv, baselineIv))
+          ) {
+            throw new StaleTabOverwriteError(
+              'تم تعديل سجل تقييم حلقة الرعاية في تبويب آخر أثناء الحفظ (Changed in another tab).'
+            );
+          }
+        } else if (currentEntity) {
+          throw new StaleTabOverwriteError(
+            'تم إنشاء سجل تقييم حلقة الرعاية في تبويب آخر أثناء الحفظ (Changed in another tab).'
+          );
+        }
+
+        if (currentEntity) {
+          const inTxDecrypted = await decryptRecordPayload<EpisodeScopedClinicalStore>(
+            dek,
+            'episodeClinical',
+            currentEntity.id,
+            [currentEntity.episodeId],
+            currentEntity.iv,
+            currentEntity.ciphertext,
+            currentEntity.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+            currentEntity.dekVersion || CURRENT_DEK_VERSION
+          );
+          assertAppendOnlySnapshots(
+            inTxDecrypted.snapshots || [],
+            payloadToEncrypt.snapshots || []
+          );
+        }
+
+        await database.episodeClinical.put(candidateEntity);
+      }
+    );
+
+    return candidateEntity;
   }
 
   static recordEpisodeSnapshot(
@@ -730,12 +987,15 @@ export class ClinicOperationsService {
   }
 
   static updateAppointmentStatus(id: string, status: AppointmentStatus): ClinicAppointment[] {
+    const existingAppt = this.getAppointments().find((a) => a.id === id);
     const list = this.getAppointments().map((a) => (a.id === id ? { ...a, status } : a));
     localStorage.setItem(STORAGE_KEYS.APPOINTMENTS, JSON.stringify(list));
     this.appendAuditLog({
       actionType: 'appointment_status_changed',
       entityType: 'appointment',
       entityId: id,
+      patientId: existingAppt?.patientId,
+      episodeId: existingAppt?.episodeId,
       summaryAr: `تحديث حالة الموعد إلى: ${status}`,
       summaryEn: `Updated appointment status to: ${status}`,
     });
@@ -958,8 +1218,10 @@ export class ClinicOperationsService {
       actionType: 'invoice_created',
       entityType: 'invoice',
       entityId: newInvoice.id,
-      summaryAr: `إصدار فاتورة ${invoiceNumber} للمريض ${params.patientName} بصافي ${formatIQD(netAmountIQD, true)}`,
-      summaryEn: `Created invoice ${invoiceNumber} for ${params.patientName} (${formatIQD(netAmountIQD, false)})`,
+      patientId: params.patientId,
+      episodeId: params.episodeId,
+      summaryAr: `إصدار فاتورة ${invoiceNumber} بصافي ${formatIQD(netAmountIQD, true)}`,
+      summaryEn: `Created invoice ${invoiceNumber} (${formatIQD(netAmountIQD, false)})`,
     });
 
     return newInvoice;
@@ -1001,8 +1263,10 @@ export class ClinicOperationsService {
         actionType: 'payment_collected_iqd',
         entityType: 'invoice',
         entityId: inv.id,
-        summaryAr: `استلام دفعة بمبلغ ${formatIQD(validPay, true)} من المريض ${inv.patientName}`,
-        summaryEn: `Collected payment of ${formatIQD(validPay, false)} from ${inv.patientName}`,
+        patientId: inv.patientId,
+        episodeId: inv.episodeId,
+        summaryAr: `استلام دفعة بمبلغ ${formatIQD(validPay, true)} على الفاتورة ${inv.invoiceNumber}`,
+        summaryEn: `Collected payment of ${formatIQD(validPay, false)} on invoice ${inv.invoiceNumber}`,
       });
 
       return {

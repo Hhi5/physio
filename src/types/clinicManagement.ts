@@ -59,6 +59,8 @@ export interface AuditLogEntry {
     | 'role_switched';
   entityType: 'patient' | 'episode' | 'session' | 'invoice' | 'expense' | 'appointment' | 'security';
   entityId: string;
+  patientId?: string;
+  episodeId?: string;
   summaryAr: string;
   summaryEn: string;
 }

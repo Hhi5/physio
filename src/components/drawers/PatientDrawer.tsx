@@ -102,8 +102,9 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
         actionType: patientToEdit ? 'patient_updated' : 'patient_created',
         entityType: 'patient',
         entityId: saved.id,
-        summaryAr: `${patientToEdit ? 'تحديث' : 'تسجيل'} ملف المريض: ${formData.fullName}`,
-        summaryEn: `${patientToEdit ? 'Updated' : 'Created'} patient record: ${formData.fullName}`,
+        patientId: saved.id,
+        summaryAr: `${patientToEdit ? 'تحديث' : 'تسجيل'} ملف المريض (#${saved.id.slice(0, 8)})`,
+        summaryEn: `${patientToEdit ? 'Updated' : 'Created'} patient record (#${saved.id.slice(0, 8)})`,
       });
       if (onSavedSuccess) onSavedSuccess(saved);
       onClose();

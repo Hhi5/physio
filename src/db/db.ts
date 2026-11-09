@@ -116,7 +116,9 @@ export class PhysioRecordDatabase extends Dexie {
 
     // Version 5 Schema Definition (Phase 1A: Encrypted Clinic Operations & Workspace Stores)
     // Note: Session flowsheets are unified directly inside `soapNotes` (single source of truth).
+    // `&sessionId` on `soapNotes` has been unique since Version 3.
     // Data migration from localStorage runs after vault unlock (requires operational DEK).
+    // Strictly kept as originally declared in v5.
     this.version(5).stores({
       patients: '&id, createdAt, updatedAt, isArchived',
       episodes: '&id, patientId, createdAt, updatedAt',
@@ -129,6 +131,29 @@ export class PhysioRecordDatabase extends Dexie {
       payments: '&id, invoiceId, patientId, createdAt, updatedAt',
       expenses: '&id, createdAt, updatedAt',
       auditLogs: '&id, createdAt',
+      staffState: '&id, updatedAt',
+      episodeClinical: '&id, &episodeId, patientId, createdAt, updatedAt',
+      customWidgets: '&id, createdAt, updatedAt',
+      migrationReports: '&id, createdAt',
+      migrationState: '&id',
+      vaultMeta: '&id',
+      episodeSequences: '&episodeId',
+    });
+
+    // Version 6 Schema Definition (Phase 1A Follow-up: Index `patientId` on `waitingList`
+    // and `patientId, episodeId` on `auditLogs` while keeping Version 5 immutable)
+    this.version(6).stores({
+      patients: '&id, createdAt, updatedAt, isArchived',
+      episodes: '&id, patientId, createdAt, updatedAt',
+      sessions: '&id, episodeId, patientId, createdAt, updatedAt',
+      soapNotes: '&id, &sessionId, episodeId, patientId, createdAt, updatedAt',
+      clinicalAddenda: '&id, sessionId, patientId, targetId, createdAt',
+      appointments: '&id, patientId, createdAt, updatedAt',
+      waitingList: '&id, patientId, createdAt, updatedAt',
+      invoices: '&id, patientId, episodeId, createdAt, updatedAt',
+      payments: '&id, invoiceId, patientId, createdAt, updatedAt',
+      expenses: '&id, createdAt, updatedAt',
+      auditLogs: '&id, patientId, episodeId, createdAt',
       staffState: '&id, updatedAt',
       episodeClinical: '&id, &episodeId, patientId, createdAt, updatedAt',
       customWidgets: '&id, createdAt, updatedAt',
@@ -160,13 +185,50 @@ export class PhysioRecordDatabase extends Dexie {
   }
 
   /**
-   * Audit dependent records for a patient before any potential hard deletion.
+   * Audit dependent records for a patient across all v5 patient-linked tables before any potential hard deletion.
    */
   async auditPatientDependentRecords(patientId: string): Promise<PatientDependentRecordsSummary> {
-    const episodesCount = await this.episodes.where('patientId').equals(patientId).count();
+    const episodes = await this.episodes.where('patientId').equals(patientId).toArray();
+    const episodeIds = episodes.map((e) => e.id);
+    const episodesCount = episodes.length;
     const sessionsCount = await this.sessions.where('patientId').equals(patientId).count();
     const soapNotesCount = await this.soapNotes.where('patientId').equals(patientId).count();
     const clinicalAddendaCount = await this.clinicalAddenda.where('patientId').equals(patientId).count();
+    const appointmentsCount = await this.appointments.where('patientId').equals(patientId).count();
+    const waitingListCount = await this.waitingList.where('patientId').equals(patientId).count();
+
+    const patientInvoices = await this.invoices.where('patientId').equals(patientId).toArray();
+    const episodeInvoices =
+      episodeIds.length > 0
+        ? await this.invoices.where('episodeId').anyOf(episodeIds).toArray()
+        : [];
+    const invoiceIdSet = new Set<string>([
+      ...patientInvoices.map((i) => i.id),
+      ...episodeInvoices.map((i) => i.id),
+    ]);
+    const invoicesCount = invoiceIdSet.size;
+
+    const paymentsByPatient = await this.payments.where('patientId').equals(patientId).toArray();
+    const paymentsByInvoice =
+      invoiceIdSet.size > 0
+        ? await this.payments.where('invoiceId').anyOf(Array.from(invoiceIdSet)).toArray()
+        : [];
+    const paymentIdSet = new Set<string>([
+      ...paymentsByPatient.map((p) => p.id),
+      ...paymentsByInvoice.map((p) => p.id),
+    ]);
+    const paymentsCount = paymentIdSet.size;
+
+    const epClinicalByPatient = await this.episodeClinical.where('patientId').equals(patientId).toArray();
+    const epClinicalByEpisode =
+      episodeIds.length > 0
+        ? await this.episodeClinical.where('episodeId').anyOf(episodeIds).toArray()
+        : [];
+    const epClinicalIdSet = new Set<string>([
+      ...epClinicalByPatient.map((c) => c.id),
+      ...epClinicalByEpisode.map((c) => c.id),
+    ]);
+    const episodeClinicalCount = epClinicalIdSet.size;
 
     return {
       patientId,
@@ -174,15 +236,23 @@ export class PhysioRecordDatabase extends Dexie {
       sessionsCount,
       soapNotesCount,
       clinicalAddendaCount,
+      appointmentsCount,
+      waitingListCount,
+      invoicesCount,
+      paymentsCount,
+      episodeClinicalCount,
     };
   }
 
   /**
    * Explicit permanent deletion with Patient Hard Deletion Safety Gate.
    * Strictly enforces:
-   * 1. Audit of all dependent records.
+   * 1. Audit of all dependent records across all v5 tables.
    * 2. Retention policy: Rejects deletion if clinical addenda exist.
    * 3. Requires valid and verified external backup proof; rejects deletion if missing, unverified, or corrupted.
+   * 4. Atomically deletes all patient-linked records across all v5 tables (`patients`, `episodes`, `sessions`,
+   *    `soapNotes`, `episodeSequences`, `appointments`, `waitingList`, `invoices`, `payments`, `episodeClinical`).
+   *    Note: Clinic-wide non-patient tables (`expenses`, `customWidgets`, `staffState`, `auditLogs`) have no patient rows.
    */
   async deletePatientPermanently(
     patientId: string,
@@ -201,7 +271,7 @@ export class PhysioRecordDatabase extends Dexie {
     // 3. Safety Gate: Require verified external backup proof
     if (!backupProof || !backupProof.verifiedBackupString) {
       throw new PatientHardDeletionBlockedError(
-        'الحذف المادي النهائي للمريض معطل ومحظور (Safety Gate Active): يتطلب النظام وجود نسخة احتياطية خارجية ناجحة ومتحقق من سلامتها قبل السماح بالإتلاف النهائي.'
+        'الحذف المادي النهائي للمريض معطل ومحظور (Safety Gate Active): يتطلب النظام وجود نسخة احتياطية خارجحة ناجحة ومتحقق من سلامتها قبل السماح بالإتلاف النهائي.'
       );
     }
 
@@ -224,52 +294,151 @@ export class PhysioRecordDatabase extends Dexie {
       }
     }
 
-    // 5. Atomic deletion in transaction (no partial cascade)
-    return this.transaction('rw', [this.patients, this.episodes, this.sessions, this.soapNotes, this.clinicalAddenda, this.episodeSequences], async () => {
-      const episodes = await this.episodes.where('patientId').equals(patientId).toArray();
-      const episodeIds = episodes.map(e => e.id);
-      if (episodeIds.length > 0) {
-        await this.episodeSequences.where('episodeId').anyOf(episodeIds).delete();
-      }
-      await this.soapNotes.where('patientId').equals(patientId).delete();
-      await this.sessions.where('patientId').equals(patientId).delete();
-      await this.episodes.where('patientId').equals(patientId).delete();
-      await this.patients.delete(patientId);
-    });
-  }
-
-  /**
-   * Cascade delete an episode and its child draft sessions and notes atomically.
-   * Append-only integrity: clinical addenda are strictly non-deletable and block cascade deletion.
-   */
-  async deleteEpisodeCascade(episodeId: string): Promise<void> {
-    return this.transaction('rw', [this.episodes, this.sessions, this.soapNotes, this.clinicalAddenda, this.episodeSequences], async () => {
-      // Find all session IDs under this episode
-      const sessions = await this.sessions.where('episodeId').equals(episodeId).toArray();
-      const sessionIds = sessions.map(s => s.id);
-
-      if (sessionIds.length > 0) {
-        // Append-only safeguard: clinical addenda must NEVER be cascade deleted
-        const addendaCount = await this.clinicalAddenda.where('sessionId').anyOf(sessionIds).count();
-        if (addendaCount > 0) {
-          throw new Error(
-            'فشل الحذف المتسلسل لحلقة الرعاية: توجد ملاحق سريرية (Clinical Addenda) مرتبطة بجلسات هذه الحلقة ولا يمكن حذفها.'
+    // 5. Atomic deletion in transaction across all v5 patient-linked tables (no partial cascade)
+    return this.transaction(
+      'rw',
+      [
+        this.patients,
+        this.episodes,
+        this.sessions,
+        this.soapNotes,
+        this.clinicalAddenda,
+        this.episodeSequences,
+        this.appointments,
+        this.waitingList,
+        this.invoices,
+        this.payments,
+        this.episodeClinical,
+      ],
+      async () => {
+        const inTxAddendaCount = await this.clinicalAddenda
+          .where('patientId')
+          .equals(patientId)
+          .count();
+        if (inTxAddendaCount > 0) {
+          throw new PatientHardDeletionBlockedError(
+            `لا يمكن إجراء الحذف المادي النهائي للمريض: يحتوي الملف على (${inTxAddendaCount}) ملاحق سريرية رسمية (Clinical Addenda).`
           );
         }
 
-        // Delete child SOAP notes
-        await this.soapNotes.where('sessionId').anyOf(sessionIds).delete();
+        const episodes = await this.episodes.where('patientId').equals(patientId).toArray();
+        const episodeIds = episodes.map((e) => e.id);
+
+        if (episodeIds.length > 0) {
+          const episodeSessions = await this.sessions
+            .where('episodeId')
+            .anyOf(episodeIds)
+            .toArray();
+          const episodeSessionIds = episodeSessions.map((s) => s.id);
+          if (episodeSessionIds.length > 0) {
+            const sessionAddendaCount = await this.clinicalAddenda
+              .where('sessionId')
+              .anyOf(episodeSessionIds)
+              .count();
+            if (sessionAddendaCount > 0) {
+              throw new PatientHardDeletionBlockedError(
+                `لا يمكن إجراء الحذف المادي النهائي للمريض: توجد ملاحق سريرية مرتبطة بجلسات المريض.`
+              );
+            }
+            await this.soapNotes.where('sessionId').anyOf(episodeSessionIds).delete();
+          }
+          await this.episodeSequences.where('episodeId').anyOf(episodeIds).delete();
+          await this.episodeClinical.where('episodeId').anyOf(episodeIds).delete();
+          await this.soapNotes.where('episodeId').anyOf(episodeIds).delete();
+          await this.sessions.where('episodeId').anyOf(episodeIds).delete();
+        }
+
+        // Delete invoices & payments linked by patientId or episodeId
+        const patientInvoices = await this.invoices.where('patientId').equals(patientId).toArray();
+        const episodeInvoices =
+          episodeIds.length > 0
+            ? await this.invoices.where('episodeId').anyOf(episodeIds).toArray()
+            : [];
+        const invoiceIds = Array.from(
+          new Set([...patientInvoices.map((i) => i.id), ...episodeInvoices.map((i) => i.id)])
+        );
+        if (invoiceIds.length > 0) {
+          await this.payments.where('invoiceId').anyOf(invoiceIds).delete();
+          await this.invoices.where('id').anyOf(invoiceIds).delete();
+        }
+
+        await this.payments.where('patientId').equals(patientId).delete();
+        await this.invoices.where('patientId').equals(patientId).delete();
+        await this.appointments.where('patientId').equals(patientId).delete();
+        await this.waitingList.where('patientId').equals(patientId).delete();
+        await this.episodeClinical.where('patientId').equals(patientId).delete();
+        await this.soapNotes.where('patientId').equals(patientId).delete();
+        await this.sessions.where('patientId').equals(patientId).delete();
+        await this.episodes.where('patientId').equals(patientId).delete();
+        await this.patients.delete(patientId);
       }
+    );
+  }
 
-      // Delete episode sequence record
-      await this.episodeSequences.delete(episodeId);
+  /**
+   * Cascade delete an episode and its child draft sessions, SOAP notes, episodeClinical, episodeSequences,
+   * and episode-linked invoices/payments atomically.
+   * Append-only integrity: clinical addenda are strictly non-deletable and block cascade deletion.
+   */
+  async deleteEpisodeCascade(episodeId: string): Promise<void> {
+    return this.transaction(
+      'rw',
+      [
+        this.episodes,
+        this.sessions,
+        this.soapNotes,
+        this.clinicalAddenda,
+        this.episodeSequences,
+        this.episodeClinical,
+        this.invoices,
+        this.payments,
+      ],
+      async () => {
+        // Find all session IDs under this episode
+        const sessions = await this.sessions.where('episodeId').equals(episodeId).toArray();
+        const sessionIds = sessions.map((s) => s.id);
 
-      // Delete sessions
-      await this.sessions.where('episodeId').equals(episodeId).delete();
+        if (sessionIds.length > 0) {
+          // Append-only safeguard: clinical addenda must NEVER be cascade deleted
+          const addendaCount = await this.clinicalAddenda
+            .where('sessionId')
+            .anyOf(sessionIds)
+            .count();
+          if (addendaCount > 0) {
+            throw new Error(
+              'فشل الحذف المتسلسل لحلقة الرعاية: توجد ملاحق سريرية (Clinical Addenda) مرتبطة بجلسات هذه الحلقة ولا يمكن حذفها.'
+            );
+          }
 
-      // Delete episode
-      await this.episodes.delete(episodeId);
-    });
+          // Delete child SOAP notes by sessionId
+          await this.soapNotes.where('sessionId').anyOf(sessionIds).delete();
+        }
+
+        // Also delete any SOAP notes indexed by episodeId
+        await this.soapNotes.where('episodeId').equals(episodeId).delete();
+
+        // Delete episode-scoped clinical store (ROM/MMT/bodyChart/HEP/snapshots)
+        await this.episodeClinical.where('episodeId').equals(episodeId).delete();
+        await this.episodeClinical.delete(episodeId);
+
+        // Delete episode-linked invoices and their child payments
+        const episodeInvoices = await this.invoices.where('episodeId').equals(episodeId).toArray();
+        const invoiceIds = episodeInvoices.map((inv) => inv.id);
+        if (invoiceIds.length > 0) {
+          await this.payments.where('invoiceId').anyOf(invoiceIds).delete();
+          await this.invoices.where('episodeId').equals(episodeId).delete();
+        }
+
+        // Delete episode sequence record
+        await this.episodeSequences.delete(episodeId);
+
+        // Delete sessions
+        await this.sessions.where('episodeId').equals(episodeId).delete();
+
+        // Delete episode
+        await this.episodes.delete(episodeId);
+      }
+    );
   }
 
   /**
@@ -292,11 +461,13 @@ export class PhysioRecordDatabase extends Dexie {
 
 export const db = new PhysioRecordDatabase();
 
-// Safely register test hooks for test environments only (isolated/no-op in production)
-registerTestHooks({
-  db,
-  PhysioRecordDatabase,
-});
+// Safely register test hooks strictly in test mode only (never expose db instance outside MODE === 'test')
+if (import.meta.env.MODE === 'test') {
+  registerTestHooks({
+    db,
+    PhysioRecordDatabase,
+  });
+}
 
 /**
  * Ask browser to mark storage as persistent (prevents eviction under disk pressure)

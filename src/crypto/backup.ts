@@ -653,6 +653,7 @@ export const restoreBackupPackage = async (
         .filter(Boolean),
       targetDatabase.vaultMeta,
       ...(targetDatabase.episodeSequences ? [targetDatabase.episodeSequences] : []),
+      ...(targetDatabase.migrationState ? [targetDatabase.migrationState] : []),
     ];
 
     await targetDatabase.transaction(
@@ -671,6 +672,11 @@ export const restoreBackupPackage = async (
         // 1b. Clear old local sequence allocations completely (eliminates stale sequence numbers)
         if (targetDatabase.episodeSequences) {
           await targetDatabase.episodeSequences.clear();
+        }
+
+        // 1c. Reset half_finalized_soap_repair_v1 in migrationState so restored backups with half-finalized sessions are repaired on unlock
+        if (targetDatabase.migrationState) {
+          await targetDatabase.migrationState.delete('half_finalized_soap_repair_v1');
         }
 
         // 2. Insert verified re-encrypted entities

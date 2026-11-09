@@ -342,13 +342,45 @@ export class UnboundVaultKeyError extends Error {
   }
 }
 
+export class StaleTabOverwriteError extends Error {
+  constructor(
+    message = 'تم تعديل هذا السجل في تبويب آخر (Changed in another tab). يرجى إعادة تحميل الجلسة لتجنب الكتابة فوق التعديلات الأحدث.'
+  ) {
+    super(message);
+    this.name = 'StaleTabOverwriteError';
+  }
+}
+
 export interface PatientDependentRecordsSummary {
   patientId: string;
   episodesCount: number;
   sessionsCount: number;
   soapNotesCount: number;
   clinicalAddendaCount: number;
+  appointmentsCount: number;
+  waitingListCount: number;
+  invoicesCount: number;
+  paymentsCount: number;
+  episodeClinicalCount: number;
 }
+
+export const CURRENT_SEAL_VERSION = 1;
+
+export type SealVerificationStatus = 'valid' | 'unsealed' | 'mismatch';
+
+export interface SealVerificationResult {
+  status: SealVerificationStatus;
+  expected?: string;
+  actual?: string;
+}
+
+/**
+ * Amendment D Feature Flag (default: false):
+ * Freezes the legacy SoapModal ROM/MMT/BodyChart/Neuro write path so only ONE writer
+ * (`MasterPatientChart` -> `ActiveExamCanvas` -> `episodeClinical`) exists for ROM/MMT/Body Chart,
+ * while preserving any existing ROM/MMT/BodyChart inside `db.soapNotes` rows untouched.
+ */
+export const ENABLE_LEGACY_SOAP_MODAL_ROM_MMT_BODYCHART_WRITES = false;
 
 // -----------------------------------------------------------------------
 // Clinical Session (Phase 2B.2)
@@ -368,6 +400,7 @@ export interface SessionClinicalData {
   finalizedBy?: string;
   attestationByTherapistName?: string; // Clinician Attestation (إقرار ومصادقة المعالج السريري)
   attestationTimestamp?: string;
+  sealVersion?: number; // 1 = canonical sorted-key SHA-256 integrity seal
   contentIntegrityDigestSha256?: string; // SHA-256 cryptographic content match digest (does not constitute an independent PKI digital signature)
 }
 
@@ -616,20 +649,36 @@ export interface SoapFlowsheetData {
   physicalAgents: PhysicalAgentFlowsheetEntry[];
 }
 
+export interface LegacyPainDetail {
+  scoreAtRest?: number;
+  scoreWithMovement?: number;
+  scoreBestLast24h?: number;
+  scoreWorstLast24h?: number;
+  contextNotes?: string;
+  assessedAt?: string;
+}
+
 export interface SoapSubjectiveData {
-  chiefComplaint: string; // شكوى المريض الحالية (Mandatory for finalize)
+  chiefComplaint?: string; // شكوى المريض الحالية
   symptomChangesSinceLastSession?: string; // تغير الأعراض منذ الجلسة السابقة
-  painNrsScore?: number; // 0 - 10 Pre-Session Numeric Rating Scale (NRS) — Single source of truth for pre-session pain
-  postSessionPainNrs?: number; // 0 - 10 Post-Session Numeric Rating Scale (NRS)
-  painAssessment?: PainAssessmentNRS; // Structured Pain NRS record
+  painNrsScore?: number; // 0 - 10 Pre-Session Numeric Rating Scale (NRS) — Single source of truth for pre-session pain (undefined when not recorded)
+  painNotRecorded?: boolean; // Explicitly marked "not recorded" (لم يُسجّل) for pre-session pain
+  postSessionPainNrs?: number; // 0 - 10 Post-Session Numeric Rating Scale (NRS) (undefined when not recorded)
+  postPainNotRecorded?: boolean; // Explicitly marked "not recorded" (لم يُسجّل) for post-session pain
   painLocationDescription?: string; // موضع الألم وطبيعته حسب وصف المريض
   bodyChart?: PatientBodyChartData; // مخطط رسم وتوثيق أعراض المريض السريري المشفر (Milestone 2)
   homeExerciseCompliance?: 'full' | 'partial' | 'non_compliant' | 'not_prescribed'; // الالتزام بالتمارين المنزلية
   homeExerciseComplianceNotes?: string;
   responseToPreviousTreatment?: string; // استجابة المريض للعلاج السابق
-  // Legacy backward-compatibility aliases
+  /** Read-only preserved legacy pain sub-fields (scoreAtRest, scoreWithMovement, 24h best/worst, contextNotes) */
+  legacyPainDetail?: LegacyPainDetail;
+  /** @deprecated Legacy read-only field — do not write in v2 */
+  painAssessment?: PainAssessmentNRS;
+  /** @deprecated Legacy read-only field — do not write in v2 */
   painVasCurrent?: number;
+  /** @deprecated Legacy read-only field — do not write in v2 */
   painVasBestLast24h?: number;
+  /** @deprecated Legacy read-only field — do not write in v2 */
   painVasWorstLast24h?: number;
 }
 
@@ -781,23 +830,38 @@ export interface SoapObjectiveData {
   functionalScales?: FunctionalScaleEntry; // المقاييس الوظيفية المعتمدة (ODI / QuickDASH / LEFS / NDI)
   customWidgetsData?: Record<string, Record<string, unknown>>; // بيانات الوحدات السريرية المخصصة
   flowsheet?: SoapFlowsheetData; // جدول التمارين والعلاج اليدوي والوسائل الفيزيائية للجلسة (Single Source of Truth)
-  dailyInterventionsSummary?: string; // ملخص التدخلات والعلاجات المنفذة في هذه الجلسة
+  dailyInterventionsSummary?: string; // ملخص التدخلات الحر المكتوب بواسطة المعالج فقط (Free-text only; never stores compiled flowsheet)
+  legacyCompiledSummary?: string; // Read-only preserved compiled summary from legacy notes
   isWithinNormalLimits?: boolean; // نتائج الفحص طبيعية بالكامل ضمن الحدود المقبولة
   notAssessedReason?: string; // سبب عدم إجراء فحص موضوعي (إلزامي إذا تم اختيار not_assessed)
 }
 
 export interface SoapAssessmentData {
-  clinicalImpressionCurrent: string; // التفسير السريري الحالي (Mandatory for finalize)
-  progressStatus: 'improved' | 'unchanged' | 'regressed' | 'plateau'; // تقدم أو تراجع الحالة
-  patientTolerance: 'well_tolerated' | 'moderate_fatigue' | 'poorly_tolerated'; // استجابة المريض وتحمله
+  clinicalImpressionCurrent?: string; // التفسير السريري الحالي (Mandatory for finalize)
+  progressStatus?: 'improved' | 'unchanged' | 'regressed' | 'plateau'; // تقدم أو تراجع الحالة (starts unselected in draft; mandatory for finalize)
+  patientTolerance?: 'well_tolerated' | 'moderate_fatigue' | 'poorly_tolerated'; // استجابة المريض وتحمله (starts unselected in draft)
   factorsImpactingProgress?: string; // المشكلات أو العوامل التي تتطلب اهتماماً سريرياً
 }
 
 export interface SoapPlanData {
-  nextSessionPlan: string; // الخطة للجلسة القادمة (Mandatory for finalize)
+  nextSessionPlan?: string; // الخطة للجلسة القادمة
   proposedModifications?: string; // التعديلات العلاجية المقترحة
   homeInstructions?: string; // التعليمات والمتابعة المنزلية
   nextAppointmentDate?: string; // تاريخ الموعد القادم
+}
+
+export type NullableClear<T> = {
+  [K in keyof T]?: T[K] | null | undefined;
+};
+
+export interface SoapNoteUpdateInput {
+  soapSchemaVersion?: number;
+  subjective?: NullableClear<SoapSubjectiveData>;
+  objective?: NullableClear<SoapObjectiveData>;
+  assessment?: NullableClear<SoapAssessmentData>;
+  plan?: NullableClear<SoapPlanData>;
+  isFinalized?: boolean;
+  legacyUnreviewed?: boolean;
 }
 
 export const CURRENT_SOAP_SCHEMA_VERSION = 2;
@@ -811,9 +875,13 @@ export interface SoapNoteData {
   isFinalized?: boolean;
   finalizedAt?: string;
   finalizedBy?: string;
+  sealVersion?: number; // 1 = canonical sorted-key SHA-256 integrity seal
   contentDigestSha256?: string;
   repairedDuringMigration?: boolean; // Honest marker when half-finalized note was repaired from finalized session
   repairedAt?: string;
+  legacyUnreviewed?: boolean; // True when created by schema < 2 or repaired from pre-1A-i.5 note until explicitly reviewed and signed
+  legacyReviewedAt?: string; // ISO 8601 timestamp when clinician confirmed review of legacy draft at Sign & Lock
+  legacyReviewedBy?: string; // Self-declared clinician label who confirmed review of legacy draft at Sign & Lock
 }
 
 export interface SoapNoteRecord {
@@ -937,6 +1005,7 @@ export interface EncryptedAppointmentEntity {
 
 export interface EncryptedWaitingListEntity {
   id: string;
+  patientId?: string;
   createdAt: string;
   updatedAt: string;
   recordCryptoVersion: number;
@@ -981,6 +1050,8 @@ export interface EncryptedExpenseEntity {
 
 export interface EncryptedAuditLogEntity {
   id: string;
+  patientId?: string;
+  episodeId?: string;
   createdAt: string;
   recordCryptoVersion: number;
   dekVersion: number;
@@ -1028,12 +1099,47 @@ export interface EncryptedMigrationReportEntity {
   ciphertext: Uint8Array;
 }
 
+export interface MigrationPainConflictRecord {
+  sessionId: string;
+  soapId: string;
+  soapPainNrsScore: number;
+  flowsheetPreSessionPainNrs: number;
+  resolution: 'flowsheet_won' | 'skipped_finalized_sealed';
+}
+
+export interface MigrationOrphanFlowsheetRecord {
+  key: string;
+  sessionId: string;
+  reason: string;
+}
+
+export interface MigrationCorruptKeyRecord {
+  key: string;
+  errorReason: string;
+}
+
+export interface MigrationReportPayload {
+  id: string;
+  createdAt: string;
+  vaultGeneration: number;
+  dryRun: boolean;
+  migratedKeys: string[];
+  skippedAlreadyCompletedKeys: string[];
+  skippedNonClinicalKeys: string[];
+  countsByTable: Record<string, number>;
+  painConflicts: MigrationPainConflictRecord[];
+  orphanFlowsheets: MigrationOrphanFlowsheetRecord[];
+  corruptKeys: MigrationCorruptKeyRecord[];
+}
+
 /**
- * Non-PHI technical state record tracking resumable/idempotent localStorage-to-Dexie v5 migration.
+ * Non-PHI technical state record tracking resumable/idempotent localStorage-to-Dexie v5 migration
+ * and post-unlock half-finalized session repair.
  */
 export interface MigrationStateEntity {
-  id: string; // 'localStorage_v5_migration'
+  id: string; // 'localStorage_v5_migration' | 'half_finalized_soap_repair_v1'
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  vaultGeneration?: number;
   completedKeyHashes: string[];
   failedKeyCount: number;
   repairedSoapNotesCount: number;
