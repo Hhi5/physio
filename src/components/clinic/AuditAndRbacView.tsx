@@ -4,6 +4,7 @@
 
 import React, { useState } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
+import { useVault } from '../../context/VaultContext';
 import {
   ClinicOperationsService,
   CLINIC_STAFF_ROSTER,
@@ -11,7 +12,7 @@ import {
 } from '../../services/clinicOperationsService';
 import { formatClinicalDate } from '../../utils/date';
 import type { ClinicStaffMember, AuditLogEntry } from '../../types/clinicManagement';
-import { ShieldCheck, UserCheck, Lock, FileSpreadsheet, CheckCircle2, XCircle } from 'lucide-react';
+import { ShieldCheck, UserCheck, Lock, FileSpreadsheet, CheckCircle2, XCircle, Database } from 'lucide-react';
 
 interface AuditAndRbacViewProps {
   onRoleChanged?: (staff: ClinicStaffMember) => void;
@@ -20,6 +21,7 @@ interface AuditAndRbacViewProps {
 export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChanged }) => {
   const { language, isRtl } = useLanguage();
   const isAr = language === 'ar';
+  const { persistenceGranted } = useVault();
 
   const [activeStaff, setActiveStaff] = useState<ClinicStaffMember>(
     ClinicOperationsService.getActiveStaff()
@@ -58,6 +60,19 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
               ? 'إدارة صلاحيات الكادر الطبي والاستقبال، قفل الملاحظات المعتمدة بـ SHA-256، وتتبع كافة العمليات الحساسة.'
               : 'Manage clinical and front-desk staff permissions, SHA-256 note locks, and immutable audit logs.'}
           </p>
+        </div>
+
+        {/* Persistence Status Badge */}
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700">
+          <Database className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+          <span className="text-slate-600 dark:text-slate-300">
+            {isAr ? 'حالة التخزين المحلي:' : 'Local Storage:'}
+          </span>
+          <span className={persistenceGranted ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+            {persistenceGranted
+              ? (isAr ? 'مستمر ومحمي' : 'Persistent (Protected)')
+              : (isAr ? 'قياسي (Best-Effort)' : 'Best-Effort')}
+          </span>
         </div>
       </div>
 

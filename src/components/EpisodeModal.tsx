@@ -91,7 +91,7 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       setIsOnsetDateExact(ed.knownVsUnknownHistoryFlags?.isOnsetDateExact ?? true);
       setAreBaselineGoalsFormalized(ed.knownVsUnknownHistoryFlags?.areBaselineGoalsFormalized ?? true);
     } else {
-      // Pre-fill from patient profile summary for a new Episode
+      // No fabricated defaults for a new Episode: start with empty strings/arrays and use placeholders as visual guides
       const defaultTitle = `حلقة رعاية: ${p.fullNameAr || p.fullName}`;
       setTitle(defaultTitle);
       setPrimarySpecialty('musculoskeletal');
@@ -100,16 +100,11 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       setOnsetDate(localDate());
       setOnsetMechanism('insidious');
       setMedicalDiagnosis(p.medicalHistory || '');
-      setClinicalImpression(p.generalNotes || 'فحص أولي وتقييم حركي للحالة.');
+      setClinicalImpression(p.generalNotes || '');
       setReferralSource('');
-      setDischargeCriteria('تحسن المدى الحركي وزوال الألم واستعادة الوظيفة اليومية بنسبة 80% فأكثر.');
-      setShortTermGoals([
-        'تقليل حدة الألم بمقدار نقطتين على مقياس VAS خلال أسبوعين.',
-        'استعادة المدى الحركي الأولي بنسبة 50% خلال أسبوعين.',
-      ]);
-      setLongTermGoals([
-        'العودة لكامل الأنشطة اليومية والوظيفية دون ألم خلال 6 أسابيع.',
-      ]);
+      setDischargeCriteria('');
+      setShortTermGoals([]);
+      setLongTermGoals([]);
       setIsOngoingLegacy(false);
       setIsDiagnosisConfirmed(true);
       setIsOnsetDateExact(true);

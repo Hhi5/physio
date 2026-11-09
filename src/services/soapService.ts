@@ -719,18 +719,21 @@ export class SoapService {
           );
         }
 
-        if (baselineSessionUpdatedAt !== undefined) {
-          const latestSessionEntity = await database.sessions.get(existing.sessionId);
-          if (
-            !latestSessionEntity ||
-            latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
+        const latestSessionEntity = await database.sessions.get(existing.sessionId);
+        if (!latestSessionEntity) {
+          throw new ReferentialIntegrityError(
+            `لا يمكن حفظ ملاحظة SOAP: الجلسة الأم "${existing.sessionId}" غير موجودة أو تم حذفها في تبويب آخر.`
+          );
+        }
+        if (
+          baselineSessionUpdatedAt !== undefined &&
+          (latestSessionEntity.updatedAt !== baselineSessionUpdatedAt ||
             (baselineSessionIv &&
-              !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv))
-          ) {
-            throw new StaleTabOverwriteError(
-              'تم تعديل أو اعتماد الجلسة الأم في تبويب آخر (Changed in another tab). يرجى إعادة التحميل.'
-            );
-          }
+              !areUint8ArraysEqual(latestSessionEntity.iv, baselineSessionIv)))
+        ) {
+          throw new StaleTabOverwriteError(
+            'تم تعديل أو اعتماد الجلسة الأم في تبويب آخر (Changed in another tab). يرجى إعادة التحميل.'
+          );
         }
 
         const allForSession = await database.soapNotes

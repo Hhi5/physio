@@ -294,6 +294,15 @@ export class PhysioRecordDatabase extends Dexie {
       }
     }
 
+    // Compute deterministic SHA-256 hash of patientId for name-free audit trail prior to entering transaction
+    const patientHashBuffer = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(patientId)
+    );
+    const patientIdHashHex = Array.from(new Uint8Array(patientHashBuffer))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+
     // 5. Atomic deletion in transaction across all v5 patient-linked tables (no partial cascade)
     return this.transaction(
       'rw',
@@ -309,6 +318,7 @@ export class PhysioRecordDatabase extends Dexie {
         this.invoices,
         this.payments,
         this.episodeClinical,
+        this.auditLogs,
       ],
       async () => {
         const inTxAddendaCount = await this.clinicalAddenda
@@ -371,6 +381,40 @@ export class PhysioRecordDatabase extends Dexie {
         await this.sessions.where('patientId').equals(patientId).delete();
         await this.episodes.where('patientId').equals(patientId).delete();
         await this.patients.delete(patientId);
+
+        // Privacy rule (Finding 3): scrub patientId and episodeId from all historical audit log entries,
+        // and append a single name-free patient_hard_deleted audit log entry referencing the SHA-256 hash.
+        await this.auditLogs.where('patientId').equals(patientId).modify((entry) => {
+          delete entry.patientId;
+          delete entry.episodeId;
+        });
+        if (episodeIds.length > 0) {
+          await this.auditLogs.where('episodeId').anyOf(episodeIds).modify((entry) => {
+            delete entry.patientId;
+            delete entry.episodeId;
+          });
+        }
+
+        const now = new Date().toISOString();
+        const auditDeletionRecord: EncryptedAuditLogEntity = {
+          id: `audit_purge_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          createdAt: now,
+          recordCryptoVersion: 1,
+          dekVersion: 1,
+          iv: new Uint8Array(12),
+          ciphertext: new Uint8Array(
+            new TextEncoder().encode(
+              JSON.stringify({
+                actionType: 'patient_hard_deleted',
+                patientIdHashSha256: patientIdHashHex,
+                summaryAr: `إتلاف وحذف مادي نهائي لملف المريض (بصمة التجزئة: ${patientIdHashHex.slice(0, 12)}...)`,
+                summaryEn: `Permanent hard deletion of patient record (Hash: ${patientIdHashHex.slice(0, 12)}...)`,
+                deletedAt: now,
+              })
+            )
+          ),
+        };
+        await this.auditLogs.put(auditDeletionRecord);
       }
     );
   }

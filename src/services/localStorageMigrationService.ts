@@ -1,12 +1,12 @@
 // =======================================================================
-// PhysioRecord — Phase 1A-ii-a: Non-Destructive localStorage -> Encrypted Dexie Migration Engine
+// PhysioRecord — Phase 1A-ii-b: Destructive localStorage -> Encrypted Dexie Migration Engine
 // - Uses `navigator.locks` (with in-process mutex fallback) for cross-tab mutual exclusion.
 // - Tracks resumable per-key progress in `db.migrationState` (`id: 'localStorage_v5_migration'`).
 // - Computes all WebCrypto operations BEFORE opening Dexie transactions.
 // - Writes encrypted records to Dexie, then verifies every record by decrypt + canonical deep-equal.
-// - Supports `dryRun: true` mode that only reports what would be migrated without writing.
-// - Reports corrupt keys, pre-session pain conflicts, and orphan flowsheets in `db.migrationReports`.
-// - Phase 1A-ii-a rule: NEVER deletes any `localStorage` key.
+// - Supports `dryRun: true` mode that only reports what would be migrated without writing or deleting.
+// - Phase 1A-ii-b rule: Deletes plaintext localStorage keys strictly AFTER successful Dexie commit and decrypt verification.
+// - If verification fails, the key is NOT deleted, the error is recorded, and execution yields to the main thread.
 // =======================================================================
 
 import { db as defaultDb, type PhysioRecordDatabase } from '../db/db';
@@ -87,6 +87,11 @@ export interface StorageLike {
 
 export interface LocalStorageMigrationOptions {
   dryRun?: boolean;
+  /**
+   * Whether to delete plaintext keys from storage after Dexie verification (Phase 1A-ii-b destructive mode).
+   * Defaults to true in Phase 1A-ii-b. Can be set to false for Phase 1A-ii-a non-destructive tests.
+   */
+  destructive?: boolean;
   storage?: StorageLike;
   /**
    * Optional test hook to simulate an interrupted migration after `interruptAfterKeys` keys have been committed.
@@ -135,6 +140,18 @@ async function withMigrationLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 
   return await runInProcess();
+}
+
+async function yieldToMainThread(): Promise<void> {
+  if (typeof globalThis !== 'undefined' && typeof (globalThis as unknown as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
+    return new Promise((resolve) => {
+      (globalThis as unknown as { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback(
+        () => resolve(),
+        { timeout: 50 }
+      );
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 async function computeSha256Hex(input: string): Promise<string> {
@@ -344,6 +361,7 @@ export class LocalStorageMigrationService {
       }
 
       const dryRun = Boolean(options.dryRun);
+      const destructive = options.destructive !== false;
       const now = new Date().toISOString();
       const reportId = `migration_report_v5_gen_${expectedGen}`;
 
@@ -524,6 +542,10 @@ export class LocalStorageMigrationService {
         const keyValueHash = await computeSha256Hex(`${key}:${rawValue}`);
         if (!dryRun && completedKeyHashSet.has(keyValueHash)) {
           skippedAlreadyCompletedKeys.push(key);
+          // Phase 1A-ii-b: Clean up any residual plaintext key that was already verified and committed in a prior run
+          if (destructive && typeof storage.removeItem === 'function') {
+            storage.removeItem(key);
+          }
           continue;
         }
 
@@ -1248,6 +1270,16 @@ export class LocalStorageMigrationService {
             keysCommittedInThisRun += 1;
             migratedKeys.push(key);
 
+            // Phase 1A-ii-b: Destructive Migration
+            // Strictly delete plaintext key from localStorage ONLY AFTER successful commit & deep-equal verification!
+            if (
+              destructive &&
+              (stagedForThisKey.length > 0 || episodeClinicalToSaveViaGuard) &&
+              typeof storage.removeItem === 'function'
+            ) {
+              storage.removeItem(key);
+            }
+
             await database.migrationState.put({
               id: LOCALSTORAGE_MIGRATION_STATE_ID,
               status: 'in_progress',
@@ -1280,6 +1312,9 @@ export class LocalStorageMigrationService {
               updatedAt: new Date().toISOString(),
             });
           }
+        } finally {
+          // Yield to browser main thread after processing each key to prevent UI jank or freezing
+          await yieldToMainThread();
         }
       }
 

@@ -38,6 +38,7 @@ import {
   MAX_BACKUP_SIZE_BYTES,
   MAX_GCM_INVOCATIONS_PER_DEK,
   DekExhaustedError,
+  generateAndWrapRecoveryKey,
 } from './vault';
 
 export const BACKUP_WARNING_THRESHOLD_BYTES = 20 * 1024 * 1024; // 20 MB (80% of 25MB max limit)
@@ -110,8 +111,15 @@ export const buildCanonicalBackupHeaderAAD = (untrustedHeader: BackupHeader | Re
     }
   }
 
+  const formatVersion =
+    typeof header.formatVersion === 'string'
+      ? header.formatVersion
+      : header.magic === 'PHYSIORECORD_BACKUP_V2.0'
+        ? '2.0'
+        : '1.1';
+
   const canonicalObj = {
-    formatVersion: '1.1', // Explicit independent format version for canonical AAD
+    formatVersion,
     magic: header.magic,
     exportDateUtc: header.exportDateUtc,
     clinicTimezone: String(header.clinicTimezone),
@@ -137,6 +145,7 @@ export const buildCanonicalBackupHeaderAAD = (untrustedHeader: BackupHeader | Re
 
 export interface ExportedBackupPackage {
   header: {
+    formatVersion?: string;
     magic: string;
     exportDateUtc: string;
     clinicTimezone: string;
@@ -167,9 +176,20 @@ export interface RestoredBackupSummary {
   sessionCount: number;
   soapCount: number;
   addendaCount?: number;
+  appointmentCount?: number;
+  waitingListCount?: number;
+  invoiceCount?: number;
+  paymentCount?: number;
+  expenseCount?: number;
+  auditLogCount?: number;
+  staffStateCount?: number;
+  episodeClinicalCount?: number;
+  customWidgetCount?: number;
+  migrationReportCount?: number;
   countsByStore: Record<string, number>;
   destinationOperationalDek: CryptoKey;
   restoredInvocationCount: number;
+  newRecoveryKey?: string;
 }
 
 export interface BackupPreviewSummary {
@@ -230,7 +250,9 @@ export const inspectBackupPreview = async (
     backupPassword,
     backupSalt,
     hkdfSalt,
-    header.kdfIterations
+    header.kdfIterations,
+    header.hkdfInfoDekWrap,
+    header.hkdfInfoPayloadEnc
   );
 
   const headerAad = buildCanonicalBackupHeaderAAD(header);
@@ -330,7 +352,9 @@ export const exportBackupPackage = async (
     backupPassword,
     backupSalt,
     hkdfSalt,
-    CONSTANTS.DEFAULT_PBKDF2_ITERATIONS
+    CONSTANTS.DEFAULT_PBKDF2_ITERATIONS,
+    'physiorecord-backup-dek-wrap-v2.0',
+    'physiorecord-backup-payload-enc-v2.0'
   );
 
   // 3. Temporarily recover raw DEK bytes using in-memory Vault KEK
@@ -349,9 +373,10 @@ export const exportBackupPackage = async (
   // Best-effort zeroing of temporary raw DEK buffer
   rawDekBytes.fill(0);
 
-  // 5. Build Complete Authenticated Header
+  // 5. Build Complete Authenticated Header (Format v2.0)
   const header = {
-    magic: 'PHYSIORECORD_BACKUP_V1.1',
+    formatVersion: '2.0',
+    magic: 'PHYSIORECORD_BACKUP_V2.0',
     exportDateUtc: new Date().toISOString(),
     clinicTimezone,
     schemaVersion: database.verno,
@@ -360,8 +385,8 @@ export const exportBackupPackage = async (
     keyExpansion: 'HKDF-SHA256',
     hkdfHash: 'SHA-256',
     hkdfSalt: Array.from(hkdfSalt),
-    hkdfInfoDekWrap: 'physiorecord-backup-dek-wrap-v1.1',
-    hkdfInfoPayloadEnc: 'physiorecord-backup-payload-enc-v1.1',
+    hkdfInfoDekWrap: 'physiorecord-backup-dek-wrap-v2.0',
+    hkdfInfoPayloadEnc: 'physiorecord-backup-payload-enc-v2.0',
     derivedKeyLengthBits: 256,
     backupSalt: Array.from(backupSalt),
     backupDekIv: Array.from(backupDekIv),
@@ -443,7 +468,9 @@ export const restoreBackupPackage = async (
     backupPassword,
     backupSalt,
     hkdfSalt,
-    header.kdfIterations
+    header.kdfIterations,
+    header.hkdfInfoDekWrap,
+    header.hkdfInfoPayloadEnc
   );
 
   // STEP 3: Authenticated unwrapping of the DEK (Verifies auth tag on wrapped DEK)
@@ -525,6 +552,9 @@ export const restoreBackupPackage = async (
 
   const verifier = await generateVerifier(destinationVaultKek);
   const newDekVersion = (header.dekVersion || CURRENT_DEK_VERSION) + 1;
+
+  // Generate and wrap new emergency recovery key for restored vault outside transaction (Phase 1B)
+  const restoredRecovery = await generateAndWrapRecoveryKey(freshRawDek);
 
   // STEP 8: Staging In-Memory Counter & Re-encryption across all registered clinical stores
   // The staging counter starts at zero and tracks every AES-GCM invocation under fresh DEK.
@@ -708,6 +738,10 @@ export const restoreBackupPackage = async (
           dekVersion: newDekVersion,
           encryptionInvocationCount: stagingInvocationCount, // Persist actual staging consumption!
           vaultGeneration: nextVaultGeneration,
+          recoveryWrappedDek: restoredRecovery.recoveryWrappedDek,
+          recoveryWrappedDekIv: restoredRecovery.recoveryWrappedDekIv,
+          recoverySalt: restoredRecovery.recoverySalt,
+          recoveryKdfIterations: restoredRecovery.recoveryKdfIterations,
         });
       }
     );
@@ -738,9 +772,20 @@ export const restoreBackupPackage = async (
     sessionCount: countsByStore['sessions'] || 0,
     soapCount: countsByStore['soapNotes'] || 0,
     addendaCount: countsByStore['clinicalAddenda'] || 0,
+    appointmentCount: countsByStore['appointments'] || 0,
+    waitingListCount: countsByStore['waitingList'] || 0,
+    invoiceCount: countsByStore['invoices'] || 0,
+    paymentCount: countsByStore['payments'] || 0,
+    expenseCount: countsByStore['expenses'] || 0,
+    auditLogCount: countsByStore['auditLogs'] || 0,
+    staffStateCount: countsByStore['staffState'] || 0,
+    episodeClinicalCount: countsByStore['episodeClinical'] || 0,
+    customWidgetCount: countsByStore['customWidgets'] || 0,
+    migrationReportCount: countsByStore['migrationReports'] || 0,
     countsByStore,
     destinationOperationalDek,
     restoredInvocationCount: stagingInvocationCount,
+    newRecoveryKey: restoredRecovery.recoveryKeyFormatted,
   };
 };
 

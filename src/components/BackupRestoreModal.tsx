@@ -76,8 +76,8 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
     e.preventDefault();
     setExportError(null);
 
-    if (exportPassword.length < 6) {
-      setExportError('يجب ألا تقل كلمة مرور النسخة الاحتياطية عن 6 خانات.');
+    if (exportPassword.length < 10) {
+      setExportError('يجب ألا تقل كلمة مرور النسخة الاحتياطية عن 10 خانات.');
       return;
     }
     if (exportPassword !== confirmExportPassword) {
@@ -177,16 +177,16 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
       setRestoreError('يجب الموافقة الصريحة على إقرار استبدال البيانات للمتابعة.');
       return;
     }
-    if (newVaultPassword.length < 6) {
-      setRestoreError('يجب ألا تقل كلمة مرور الخزينة الجديدة عن 6 خانات.');
+    if (newVaultPassword.length < 10) {
+      setRestoreError('يجب ألا تقل كلمة مرور الخزينة الجديدة عن 10 خانات.');
       return;
     }
     if (newVaultPassword !== confirmNewVaultPassword) {
       setRestoreError('كلمتا مرور الخزينة الجديدة غير متطابقتين.');
       return;
     }
-    if (emergencyRecoveryPassword.length < 6) {
-      setRestoreError('يجب ألا تقل كلمة مرور حماية نسخة التعافي الطارئة عن 6 خانات.');
+    if (emergencyRecoveryPassword.length < 10) {
+      setRestoreError('يجب ألا تقل كلمة مرور حماية نسخة التعافي الطارئة عن 10 خانات.');
       return;
     }
     if (emergencyRecoveryPassword !== confirmEmergencyRecoveryPassword) {

@@ -144,15 +144,7 @@ export const createDurablePreRestoreRecoveryBackup = async (
     backupDekWrapKey
   );
 
-  // B. Prove decryption of payload with canonical header AAD
-  const headerAad = buildCanonicalBackupHeaderAAD(header);
-  const decryptedPayloadJson = await decryptBackupPayload(
-    backupPayloadEncKey,
-    headerAad,
-    backupDataIv,
-    payloadCiphertext
-  );
-
+  let testDek: CryptoKey;
   interface SerializedRecoveryRecord {
     id: string;
     iv: number[];
@@ -161,46 +153,57 @@ export const createDurablePreRestoreRecoveryBackup = async (
     dekVersion?: number;
     [key: string]: unknown;
   }
-
   let snapshot: Record<string, SerializedRecoveryRecord[]>;
+
   try {
-    snapshot = JSON.parse(decryptedPayloadJson) as Record<string, SerializedRecoveryRecord[]>;
-  } catch {
-    throw new Error('فشل قراءة حمولة نسخة التعافي الطارئة بعد فك التشفير.');
-  }
+    // B. Prove decryption of payload with canonical header AAD
+    const headerAad = buildCanonicalBackupHeaderAAD(header);
+    const decryptedPayloadJson = await decryptBackupPayload(
+      backupPayloadEncKey,
+      headerAad,
+      backupDataIv,
+      payloadCiphertext
+    );
 
-  // C. Prove that the recovered DEK can cleanly decrypt EVERY record across ALL clinical stores
-  const testDek = await subtle.importKey(
-    'raw',
-    recoveredRawDek,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['decrypt']
-  );
+    try {
+      snapshot = JSON.parse(decryptedPayloadJson) as Record<string, SerializedRecoveryRecord[]>;
+    } catch {
+      throw new Error('فشل قراءة حمولة نسخة التعافي الطارئة بعد فك التشفير.');
+    }
 
-  // Zero raw DEK copy
-  recoveredRawDek.fill(0);
+    // C. Prove that the recovered DEK can cleanly decrypt EVERY record across ALL clinical stores
+    testDek = await subtle.importKey(
+      'raw',
+      recoveredRawDek,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['decrypt']
+    );
 
-  for (const storeDef of Object.values(CLINICAL_STORES_REGISTRY)) {
-    const records = snapshot[storeDef.name];
-    if (Array.isArray(records)) {
-      for (const r of records) {
-        const parentIds = storeDef.parentKeys
-          .map((k) => r[k])
-          .filter((v): v is string => typeof v === 'string' && Boolean(v));
-        const sourceDekVersion = r.dekVersion || header.dekVersion || CURRENT_DEK_VERSION;
-        await decryptRecordPayload(
-          testDek,
-          storeDef.name,
-          r.id,
-          parentIds,
-          new Uint8Array(r.iv),
-          new Uint8Array(r.ciphertext),
-          r.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
-          sourceDekVersion
-        );
+    for (const storeDef of Object.values(CLINICAL_STORES_REGISTRY)) {
+      const records = snapshot[storeDef.name];
+      if (Array.isArray(records)) {
+        for (const r of records) {
+          const parentIds = storeDef.parentKeys
+            .map((k) => r[k])
+            .filter((v): v is string => typeof v === 'string' && Boolean(v));
+          const sourceDekVersion = r.dekVersion || header.dekVersion || CURRENT_DEK_VERSION;
+          await decryptRecordPayload(
+            testDek,
+            storeDef.name,
+            r.id,
+            parentIds,
+            new Uint8Array(r.iv),
+            new Uint8Array(r.ciphertext),
+            r.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+            sourceDekVersion
+          );
+        }
       }
     }
+  } finally {
+    // Guaranteed zeroing of raw DEK buffer even if decryption or parsing throws
+    recoveredRawDek.fill(0);
   }
 
   // 3. Persist into the internal logical recovery database
@@ -224,11 +227,11 @@ export const createDurablePreRestoreRecoveryBackup = async (
     throw new Error('فشل حفظ وتأكيد وجود لقطة التعافي في قاعدة بيانات الطوارئ (PhysioRecordEmergencyRecoveryDB).');
   }
 
-  // Secondary internal redundancy: cache encrypted package in localStorage (if quota permits)
+  // Clean up any legacy safety backup from localStorage (IndexedDB PhysioRecordEmergencyRecoveryDB is sufficient)
   try {
-    localStorage.setItem('physiorecord_pre_restore_safety_backup', backupPackageStr);
+    localStorage.removeItem('physiorecord_pre_restore_safety_backup');
   } catch {
-    // Quota exceeded; ignored
+    // ignored
   }
 
   return {

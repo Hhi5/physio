@@ -959,6 +959,10 @@ export interface VaultMetaEntity {
   dekVersion: number; // Version of the active operational DEK
   encryptionInvocationCount: number; // Aggregate key-usage limit under current DEK (not a mathematical guarantee of random IV uniqueness)
   vaultGeneration?: number; // Technical generation/epoch counter to fence out concurrent stale writes across full restore
+  recoveryWrappedDek?: Uint8Array; // Raw DEK encrypted by Recovery Key KEK (Phase 1B)
+  recoveryWrappedDekIv?: Uint8Array; // 12-byte IV for recoveryWrappedDek
+  recoverySalt?: Uint8Array; // 16 bytes salt for Recovery Key KEK
+  recoveryKdfIterations?: number; // KDF iterations for Recovery Key
 }
 
 // -----------------------------------------------------------------------

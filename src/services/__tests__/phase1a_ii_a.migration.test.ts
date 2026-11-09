@@ -694,6 +694,7 @@ describe('Follow-Up Items A-F & Phase 1A-ii-a Non-Destructive Migration Engine',
 
       const result = await LocalStorageMigrationService.runMigration(dek, testDb, {
         storage: mockStorage,
+        destructive: false,
       });
 
       expect(result.status).toBe('completed');
@@ -782,6 +783,7 @@ describe('Follow-Up Items A-F & Phase 1A-ii-a Non-Destructive Migration Engine',
 
       const firstRun = await LocalStorageMigrationService.runMigration(dek, testDb, {
         storage: mockStorage,
+        destructive: false,
       });
       expect(firstRun.status).toBe('completed');
       expect(firstRun.report.migratedKeys).toHaveLength(1);
@@ -791,6 +793,7 @@ describe('Follow-Up Items A-F & Phase 1A-ii-a Non-Destructive Migration Engine',
 
       const secondRun = await LocalStorageMigrationService.runMigration(dek, testDb, {
         storage: mockStorage,
+        destructive: false,
       });
       expect(secondRun.status).toBe('completed');
       expect(secondRun.alreadyCompleted).toBe(true);
@@ -855,6 +858,7 @@ describe('Follow-Up Items A-F & Phase 1A-ii-a Non-Destructive Migration Engine',
       const interruptedRun = await LocalStorageMigrationService.runMigration(dek, testDb, {
         storage: mockStorage,
         interruptAfterKeys: 2,
+        destructive: false,
       });
       expect(interruptedRun.status).toBe('interrupted');
       expect(interruptedRun.report.migratedKeys).toHaveLength(2);
@@ -866,6 +870,7 @@ describe('Follow-Up Items A-F & Phase 1A-ii-a Non-Destructive Migration Engine',
       // Run 2: resume without interruption
       const resumedRun = await LocalStorageMigrationService.runMigration(dek, testDb, {
         storage: mockStorage,
+        destructive: false,
       });
       expect(resumedRun.status).toBe('completed');
       expect(resumedRun.report.skippedAlreadyCompletedKeys).toHaveLength(2);

@@ -21,6 +21,7 @@ import {
   canonicalizeForSeal,
   HALF_FINALIZED_REPAIR_STATE_ID,
 } from '../sessionService';
+import { ReferentialIntegrityError } from '../../db/registry';
 import {
   SoapService,
   MAX_ADDENDUM_TEXT_LENGTH,
@@ -1082,12 +1083,23 @@ describe('Phase 1A-i.5 — Unified SOAP + Flowsheet, No Fabricated Defaults, Sin
           await SessionService.finalizeSession(pair5.session.id, 'Dr. Concurrent', dek, db);
         }
       });
+      // 6. SoapService.updateSoapNote race when parent session is deleted in another tab (Finding 1 fix)
+      const pair6 = await createDraftSessionWithCompleteSoap('update-parent-del');
+      setSoapMutationTestHook(async (op, ctx) => {
+        if (op === 'updateSoapNote' && ctx.soapId === pair6.soap.id) {
+          setSoapMutationTestHook(null);
+          // Simulate concurrent tab deleting the parent session
+          await db.sessions.delete(pair6.session.id);
+        }
+      });
       await expect(
-        SoapService.deleteSoapNote(pair5.soap.id, dek, db)
-      ).rejects.toThrow(StaleTabOverwriteError);
-      const after5 = await SoapService.getSoapNoteBySession(pair5.session.id, dek, db);
-      expect(after5).not.toBeNull();
-      expect(after5?.data.isFinalized).toBe(true);
+        SoapService.updateSoapNote(
+          pair6.soap.id,
+          { subjective: { chiefComplaint: 'Orphan attempt' } },
+          dek,
+          db
+        )
+      ).rejects.toThrow(ReferentialIntegrityError);
     } finally {
       setSessionMutationTestHook(null);
       setSoapMutationTestHook(null);
@@ -1623,6 +1635,18 @@ describe('Phase 1A-i.5 — Unified SOAP + Flowsheet, No Fabricated Defaults, Sin
     expect(await db.invoices.get('inv-ep1')).toBeUndefined();
     expect(await db.payments.get('pay-ep1')).toBeUndefined();
 
+    // Seed an auditLog linked to patientId and episodeId prior to permanent deletion
+    await db.auditLogs.put({
+      id: 'audit-test-pat1',
+      patientId,
+      episodeId,
+      createdAt: now,
+      recordCryptoVersion: 1,
+      dekVersion: 1,
+      iv: dummyIv,
+      ciphertext: dummyCipher,
+    });
+
     // 3. Delete patient permanently -> zero patient-linked rows survive in any v5 table
     await db.deletePatientPermanently(patientId, {
       verifiedBackupString: '{"header":{"magic":"PHYSIORECORD_BACKUP_V1.1"}}',
@@ -1644,6 +1668,20 @@ describe('Phase 1A-i.5 — Unified SOAP + Flowsheet, No Fabricated Defaults, Sin
     });
     expect(await db.patients.get(patientId)).toBeUndefined();
     expect(await db.episodeSequences.get(episode2.id)).toBeUndefined();
+
+    // Verify audit logs were scrubbed of patientId and episodeId
+    const scrubbedAudit = await db.auditLogs.get('audit-test-pat1');
+    expect(scrubbedAudit).toBeDefined();
+    expect(scrubbedAudit?.patientId).toBeUndefined();
+    expect(scrubbedAudit?.episodeId).toBeUndefined();
+
+    // Verify the single name-free patient_hard_deleted entry was appended
+    const allAudit = await db.auditLogs.toArray();
+    const hardDeletedEntry = allAudit.find((a) =>
+      new TextDecoder().decode(a.ciphertext).includes('patient_hard_deleted')
+    );
+    expect(hardDeletedEntry).toBeDefined();
+    expect(hardDeletedEntry?.patientId).toBeUndefined();
   });
 
   it('enforces append-only snapshots in ClinicOperationsService.saveEpisodeClinicalStore and freezes legacy SoapModal ROM/MMT/BodyChart writes by default (Amendment D)', () => {

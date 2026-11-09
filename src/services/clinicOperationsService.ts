@@ -918,6 +918,9 @@ export class ClinicOperationsService {
     } catch {
       // ignore
     }
+    if (!import.meta.env.DEV) {
+      return [];
+    }
     const today = localDate();
     const defaults: ClinicAppointment[] = [
       {
@@ -1016,6 +1019,9 @@ export class ClinicOperationsService {
     } catch {
       // ignore
     }
+    if (!import.meta.env.DEV) {
+      return [];
+    }
     const defaults: WaitingListEntry[] = [
       {
         id: 'wait_1',
@@ -1070,6 +1076,9 @@ export class ClinicOperationsService {
       if (raw) return JSON.parse(raw);
     } catch {
       // ignore
+    }
+    if (!import.meta.env.DEV) {
+      return [];
     }
     const today = localDate();
     const defaults: FinancialInvoiceIQD[] = [
@@ -1323,6 +1332,9 @@ export class ClinicOperationsService {
       if (raw) return JSON.parse(raw);
     } catch {
       // ignore
+    }
+    if (!import.meta.env.DEV) {
+      return [];
     }
     const today = localDate();
     const defaults: ClinicExpenseIQD[] = [

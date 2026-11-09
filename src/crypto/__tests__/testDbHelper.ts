@@ -170,6 +170,15 @@ export function createInMemoryDatabase(initialVerno = 6) {
                 }
                 return items.length;
               },
+              async modify(changeFn: (obj: Record<string, unknown>) => void) {
+                const items = Array.from(store.values()).filter(
+                  (item) => item[indexField] === expectedValue
+                );
+                for (const item of items) {
+                  changeFn(item);
+                }
+                return items.length;
+              },
             };
           },
           anyOf(expectedValues: unknown[]) {
@@ -189,6 +198,15 @@ export function createInMemoryDatabase(initialVerno = 6) {
                 const items = matching();
                 for (const item of items) {
                   store.delete(String(item[primaryKeyField]));
+                }
+                return items.length;
+              },
+              async modify(changeFn: (obj: Record<string, unknown>) => void) {
+                const items = Array.from(store.values()).filter((item) =>
+                  set.has(item[indexField])
+                );
+                for (const item of items) {
+                  changeFn(item);
                 }
                 return items.length;
               },
