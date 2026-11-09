@@ -124,7 +124,7 @@ export interface CustomWidgetField {
   step?: number;
   unit?: string;
   options?: CustomFieldOption[];
-  defaultValue?: any;
+  defaultValue?: string | number | boolean | null;
 }
 
 export interface CustomWidgetDefinition {

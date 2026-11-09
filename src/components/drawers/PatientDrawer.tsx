@@ -8,7 +8,8 @@ import { Drawer } from '../layout/Drawer';
 import { usePatients } from '../../context/PatientContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { ClinicOperationsService } from '../../services/clinicOperationsService';
-import type { PatientClinicalData, PatientRecord } from '../../types/clinical';
+import type { PatientClinicalData, PatientRecord, Gender } from '../../types/clinical';
+import { computePatientAge } from '../../utils/date';
 import { Save, ShieldAlert, UserCheck } from 'lucide-react';
 
 interface PatientDrawerProps {
@@ -50,7 +51,11 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const patientToEditId = patientToEdit?.id ?? null;
+
   useEffect(() => {
+    if (!isOpen) return;
+
     if (patientToEdit) {
       setFormData({ ...patientToEdit.data });
     } else {
@@ -74,7 +79,8 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
       });
     }
     setError(null);
-  }, [patientToEdit, isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, patientToEditId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,7 +93,11 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
     setError(null);
 
     try {
-      const saved = await savePatient(formData, patientToEdit?.id);
+      const normalizedData: PatientClinicalData = {
+        ...formData,
+        age: formData.dateOfBirth ? computePatientAge(formData.dateOfBirth, formData.age) : formData.age,
+      };
+      const saved = await savePatient(normalizedData, patientToEdit?.id);
       ClinicOperationsService.appendAuditLog({
         actionType: patientToEdit ? 'patient_updated' : 'patient_created',
         entityType: 'patient',
@@ -97,9 +107,9 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
       });
       if (onSavedSuccess) onSavedSuccess(saved);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to save patient:', err);
-      setError(err.message || 'Error saving patient record');
+      setError(err instanceof Error ? err.message : 'Error saving patient record');
     } finally {
       setSaving(false);
     }
@@ -191,7 +201,7 @@ export const PatientDrawer: React.FC<PatientDrawerProps> = ({
             </label>
             <select
               value={formData.gender}
-              onChange={(e) => setFormData({ ...formData, gender: e.target.value as any })}
+              onChange={(e) => setFormData({ ...formData, gender: e.target.value as Gender })}
               className="w-full px-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-750 text-slate-900 dark:text-white"
             >
               <option value="male">{isAr ? 'ذكر' : 'Male'}</option>

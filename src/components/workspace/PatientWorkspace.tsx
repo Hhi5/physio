@@ -214,7 +214,7 @@ export const PatientWorkspace: React.FC<PatientWorkspaceProps> = ({
         onClose={() => setIsSessionDrawerOpen(false)}
         patientId={patient.id}
         episodeId={selectedEpisodeId || activeEpisode?.id || ''}
-        nextSessionNumber={episodeSessions.length + 1}
+        nextSessionNumber={SessionService.computeNextSessionNumber(episodeSessions)}
         onSessionCreated={(newSess) => {
           setSessions((prev) => [newSess, ...prev]);
           setSelectedSessionId(newSess.id);

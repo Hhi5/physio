@@ -10,6 +10,7 @@ import {
   ClinicOperationsService,
   formatIQD,
 } from '../../services/clinicOperationsService';
+import { localDate } from '../../utils/date';
 import type {
   ClinicAppointment,
   AppointmentStatus,
@@ -67,7 +68,7 @@ export const ReceptionCommandCenterView: React.FC<ReceptionCommandCenterViewProp
     setAppointments(updated);
   };
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDate();
   const todayAppointments = appointments.filter((a) => a.date === today);
 
   // Iraqi Financial KPIs

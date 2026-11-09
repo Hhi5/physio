@@ -7,6 +7,7 @@ import React, { useState, useMemo } from 'react';
 import { usePatients } from '../context/PatientContext';
 import { useLanguage } from '../context/LanguageContext';
 import type { PatientRecord } from '../types/clinical';
+import { computePatientAge, formatClinicalDate } from '../utils/date';
 import {
   Search,
   UserPlus,
@@ -113,14 +114,16 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            onClick={onOpenSyntheticModal}
-            className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-            <span>{bi('حالات سريرية تجريبية', 'Load Demo Cases')}</span>
-          </button>
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={onOpenSyntheticModal}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+              <span>{bi('حالات سريرية تجريبية', 'Load Demo Cases')}</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -284,7 +287,7 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={filterGender}
-              onChange={(e) => setFilterGender(e.target.value as any)}
+              onChange={(e) => setFilterGender(e.target.value as 'all' | 'male' | 'female')}
               className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-slate-950 focus:outline-none focus:border-teal-500"
             >
               <option value="all">{bi('كافة الفئات', 'All Genders')}</option>
@@ -369,7 +372,9 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
                             }`}
                           >
                             {p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}{' '}
-                            {p.age ? `• ${p.age}` : ''}
+                            {computePatientAge(p.dateOfBirth, p.age) !== undefined
+                              ? `• ${computePatientAge(p.dateOfBirth, p.age)}`
+                              : ''}
                           </span>
                         </td>
                         <td className="py-3.5 px-4 max-w-xs">
@@ -435,7 +440,9 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
                         }`}
                       >
                         {p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}{' '}
-                        {p.age ? `(${p.age})` : ''}
+                        {computePatientAge(p.dateOfBirth, p.age) !== undefined
+                          ? `(${computePatientAge(p.dateOfBirth, p.age)})`
+                          : ''}
                       </span>
                     </div>
 
@@ -472,9 +479,7 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
                         <span>
                           {bi('آخر تحديث:', 'Updated:')}{' '}
-                          {new Date(patient.updatedAt).toLocaleDateString(
-                            isEn ? 'en-US' : 'ar-SA'
-                          )}
+                          {formatClinicalDate(patient.updatedAt, isEn ? 'en' : 'ar')}
                         </span>
                       </div>
                     </div>
@@ -565,14 +570,16 @@ export const PatientDirectory: React.FC<PatientDirectoryProps> = ({
                 <UserPlus className="w-4 h-4" />
                 <span>{bi('تسجيل مريض جديد', 'New Patient')}</span>
               </button>
-              <button
-                type="button"
-                onClick={onOpenSyntheticModal}
-                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <span>{bi('إدراج بيانات تجريبية جاهزة', 'Load Synthetic Cases')}</span>
-              </button>
+              {import.meta.env.DEV && (
+                <button
+                  type="button"
+                  onClick={onOpenSyntheticModal}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                  <span>{bi('إدراج بيانات تجريبية جاهزة', 'Load Synthetic Cases')}</span>
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -2,13 +2,14 @@
 // PhysioRecord — Episode of Care Creation Slide-over Drawer
 // =======================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Drawer } from '../layout/Drawer';
 import { useVault } from '../../context/VaultContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { EpisodeService } from '../../services/episodeService';
 import type { EpisodeClinicalData, EpisodeRecord, ClinicalSpecialty, OnsetMechanism } from '../../types/clinical';
 import { CLINICAL_SPECIALTIES, COMMON_BODY_REGIONS } from '../../data/terminology';
+import { localDate } from '../../utils/date';
 import { Save, Trash2 } from 'lucide-react';
 
 interface EpisodeDrawerProps {
@@ -35,13 +36,26 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   const [affectedBodyRegion, setAffectedBodyRegion] = useState('');
   const [medicalDiagnosis, setMedicalDiagnosis] = useState('');
   const [clinicalImpression, setClinicalImpression] = useState('');
-  const [onsetDate] = useState(new Date().toISOString().split('T')[0]);
+  const [onsetDate, setOnsetDate] = useState(localDate());
   const [onsetMechanism] = useState<OnsetMechanism>('insidious');
   const [shortTermGoals, setShortTermGoals] = useState<string[]>([]);
   const [newGoalInput, setNewGoalInput] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setTitle('');
+    setPrimarySpecialty('musculoskeletal');
+    setAffectedBodyRegion('');
+    setMedicalDiagnosis('');
+    setClinicalImpression('');
+    setOnsetDate(localDate());
+    setShortTermGoals([]);
+    setNewGoalInput('');
+    setError(null);
+  }, [isOpen, patientId]);
 
   const handleAddGoal = () => {
     if (newGoalInput.trim()) {
@@ -86,9 +100,9 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
       const created = await EpisodeService.createEpisode(patientId, payload, dek);
       onEpisodeCreated(created);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create episode:', err);
-      setError(err.message || 'Error creating episode of care');
+      setError(err instanceof Error ? err.message : 'Error creating episode of care');
     } finally {
       setSaving(false);
     }
@@ -155,7 +169,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
             </label>
             <select
               value={primarySpecialty}
-              onChange={(e) => setPrimarySpecialty(e.target.value as any)}
+              onChange={(e) => setPrimarySpecialty(e.target.value as ClinicalSpecialty)}
               className="w-full px-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-750 text-slate-900 dark:text-white"
             >
               {Object.keys(CLINICAL_SPECIALTIES).map((specKey) => (

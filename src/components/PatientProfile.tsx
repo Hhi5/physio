@@ -8,6 +8,7 @@ import { db } from '../db/db';
 import { usePatients } from '../context/PatientContext';
 import { useEpisodes } from '../context/EpisodeContext';
 import { useLanguage } from '../context/LanguageContext';
+import { computePatientAge } from '../utils/date';
 import { ArrowLeft } from 'lucide-react';
 import { EpisodeModal } from './EpisodeModal';
 import { EpisodeDischargeModal } from './EpisodeDischargeModal';
@@ -94,6 +95,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
   }, [patient.id, loadEpisodesForPatient]);
 
   const p = patient.data;
+  const displayAge = computePatientAge(p.dateOfBirth, p.age);
   const isArchived = Boolean(patient.isArchived);
   const hasRedFlags = Boolean(p.redFlags && p.redFlags.trim().length > 0);
   const targetConfirmName = p.fullNameAr || p.fullName;
@@ -331,10 +333,10 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
 
             {/* Quick Metadata Pill Badges */}
             <div className="flex flex-wrap items-center gap-y-2 gap-x-4 text-xs sm:text-sm text-slate-500 mt-3">
-              {p.age !== undefined && (
+              {displayAge !== undefined && (
                 <div className="flex items-center gap-1.5">
                   <Calendar className="w-4 h-4 text-slate-400" />
-                  <span>{bi('العمر:', 'Age:')} <strong className="text-slate-800">{p.age} {bi('سنة', 'yrs')}</strong></span>
+                  <span>{bi('العمر:', 'Age:')} <strong className="text-slate-800">{displayAge} {bi('سنة', 'yrs')}</strong></span>
                   {p.dateOfBirth && <span className="text-slate-400">({p.dateOfBirth})</span>}
                 </div>
               )}

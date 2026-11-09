@@ -25,7 +25,10 @@ import {
   type SessionRecord, 
   type SoapNoteRecord, 
   type SoapNoteData, 
+  type SoapSubjectiveData,
   type SoapObjectiveData,
+  type SoapAssessmentData,
+  type SoapPlanData,
   type PatientRecord,
   type EpisodeRecord,
   type ObjectiveAssessmentStatus,
@@ -116,12 +119,13 @@ export const SoapModal: React.FC<SoapModalProps> = ({
   const [nextAppointmentDate, setNextAppointmentDate] = useState('');
 
   useEffect(() => {
+    if (!isOpen) return;
     if (existingSoap) {
       const d = existingSoap.data;
-      const s = d.subjective || ({} as any);
-      const o = d.objective || ({} as any);
-      const a = d.assessment || ({} as any);
-      const p = d.plan || ({} as any);
+      const s: Partial<SoapSubjectiveData> = d.subjective || {};
+      const o: Partial<SoapObjectiveData> = d.objective || {};
+      const a: Partial<SoapAssessmentData> = d.assessment || {};
+      const p: Partial<SoapPlanData> = d.plan || {};
 
       setChiefComplaint(s.chiefComplaint || '');
       setSymptomChangesSinceLastSession(s.symptomChangesSinceLastSession || '');
@@ -176,7 +180,8 @@ export const SoapModal: React.FC<SoapModalProps> = ({
     }
     setError(null);
     setSuccessNotice(null);
-  }, [existingSoap, episode, session, isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, session.id, existingSoap?.id]);
 
   if (!isOpen) return null;
 
@@ -248,8 +253,8 @@ export const SoapModal: React.FC<SoapModalProps> = ({
       await onSaveSoap(payload);
       setSuccessNotice(bi('تم حفظ مسودة ملاحظات SOAP وتشفيرها بنجاح.', 'SOAP draft saved and encrypted successfully.'));
       setTimeout(() => setSuccessNotice(null), 3000);
-    } catch (err: any) {
-      setError(err?.message || bi('فشل حفظ الملاحظة.', 'Failed to save note.'));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : bi('فشل حفظ الملاحظة.', 'Failed to save note.'));
     } finally {
       setSubmitting(false);
     }
@@ -319,8 +324,8 @@ export const SoapModal: React.FC<SoapModalProps> = ({
       await onFinalizeSession(session.id, therapistSignature.trim());
       setShowFinalizeConfirm(false);
       onClose();
-    } catch (err: any) {
-      setError(err?.message || bi('فشل اعتماد الجلسة.', 'Failed to finalize session.'));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : bi('فشل اعتماد الجلسة.', 'Failed to finalize session.'));
       setShowFinalizeConfirm(false);
     } finally {
       setSubmitting(false);
@@ -389,7 +394,7 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setActiveTab(tab.id as any)}
+                  onClick={() => setActiveTab(tab.id as 'subjective' | 'objective' | 'assessment' | 'plan' | 'preview')}
                   className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-t-lg text-xs font-semibold border-b-2 transition-all whitespace-nowrap ${
                     isActive
                       ? 'border-primary-600 text-primary-700 bg-white shadow-2xs'
@@ -557,7 +562,7 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => !isFinalized && setHomeExerciseCompliance(item.id as any)}
+                      onClick={() => !isFinalized && setHomeExerciseCompliance(item.id as 'full' | 'partial' | 'non_compliant' | 'not_prescribed')}
                       disabled={isFinalized}
                       className={`py-1.5 px-2 rounded-md text-xs font-medium border text-center transition-all ${
                         homeExerciseCompliance === item.id
@@ -880,7 +885,7 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => !isFinalized && setProgressStatus(item.id as any)}
+                      onClick={() => !isFinalized && setProgressStatus(item.id as 'improved' | 'unchanged' | 'plateau' | 'regressed')}
                       disabled={isFinalized}
                       className={`py-1.5 px-2 rounded-md text-xs font-medium border text-center transition-all ${
                         progressStatus === item.id
@@ -908,7 +913,7 @@ export const SoapModal: React.FC<SoapModalProps> = ({
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => !isFinalized && setPatientTolerance(item.id as any)}
+                      onClick={() => !isFinalized && setPatientTolerance(item.id as 'well_tolerated' | 'moderate_fatigue' | 'poorly_tolerated')}
                       disabled={isFinalized}
                       className={`py-1.5 px-2 rounded-md text-xs font-medium border text-center transition-all ${
                         patientTolerance === item.id

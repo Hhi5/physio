@@ -10,6 +10,7 @@ import {
   ClinicOperationsService,
   CLINIC_STAFF_ROSTER,
 } from '../../services/clinicOperationsService';
+import { localDate } from '../../utils/date';
 import type {
   ClinicAppointment,
   AppointmentStatus,
@@ -35,7 +36,7 @@ export const AppointmentScheduleView: React.FC = () => {
 
   const [appointments, setAppointments] = useState<ClinicAppointment[]>([]);
   const [waitingList, setWaitingList] = useState<WaitingListEntry[]>([]);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(localDate());
   const [selectedTherapist, setSelectedTherapist] = useState<string>('all');
   const [showNewApptForm, setShowNewApptForm] = useState(false);
   const [showNewWaitlistForm, setShowNewWaitlistForm] = useState(false);
@@ -487,7 +488,7 @@ export const AppointmentScheduleView: React.FC = () => {
               <div className="flex items-center gap-2">
                 <select
                   value={waitPriority}
-                  onChange={(e) => setWaitPriority(e.target.value as any)}
+                  onChange={(e) => setWaitPriority(e.target.value as 'urgent' | 'high' | 'normal')}
                   className="flex-1 px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
                 >
                   <option value="normal">{isAr ? 'أولوية اعتيادية' : 'Normal Priority'}</option>

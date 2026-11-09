@@ -14,22 +14,24 @@ import {
   PT_EXERCISE_CATALOG,
   ROLE_PERMISSIONS,
 } from '../../services/clinicOperationsService';
-import type {
-  SessionRecord,
-  SoapNoteRecord,
-  SoapNoteData,
+import {
+  ADDENDUM_REASONS,
+  CURRENT_SOAP_SCHEMA_VERSION,
+  type SessionRecord,
+  type SoapNoteRecord,
+  type SoapNoteData,
+  type SoapFlowsheetData,
+  type ClinicalAddendumRecord,
+  type AddendumReason,
+  type FlowsheetExerciseEntry,
+  type ManualTherapyFlowsheetEntry,
+  type PhysicalAgentFlowsheetEntry,
 } from '../../types/clinical';
-import type {
-  SessionFlowsheetData,
-  FlowsheetExerciseEntry,
-  ManualTherapyFlowsheetEntry,
-  PhysicalAgentFlowsheetEntry,
-} from '../../types/clinicManagement';
+import { formatClinicalDate } from '../../utils/date';
 import {
   ArrowLeft,
   ArrowRight,
   Save,
-  CheckCircle2,
   Layers,
   Copy,
   Plus,
@@ -38,7 +40,11 @@ import {
   Dumbbell,
   Zap,
   Hand,
+  FilePlus2,
+  ShieldCheck,
+  AlertCircle,
 } from 'lucide-react';
+
 
 interface TreatmentSessionViewProps {
   session: SessionRecord;
@@ -64,12 +70,21 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
   const { dek } = useVault();
 
   const [soapRecord, setSoapRecord] = useState<SoapNoteRecord | null>(null);
+  const [addenda, setAddenda] = useState<ClinicalAddendumRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isLocked, setIsLocked] = useState(session.data.status === 'finalized');
 
-  // Daily Treatment SOAP Fields
+  // Append-Only Addendum Form State (for finalized sessions)
+  const [addendumReason, setAddendumReason] = useState<AddendumReason>('treatment_response_update');
+  const [addendumText, setAddendumText] = useState('');
+  const [addendumSigner, setAddendumSigner] = useState('');
+  const [isSavingAddendum, setIsSavingAddendum] = useState(false);
+  const [addendumError, setAddendumError] = useState<string | null>(null);
+
+  // Daily Treatment SOAP Fields (Single Source of Truth in db.soapNotes)
   const [prePainNrs, setPrePainNrs] = useState<number>(5);
   const [postPainNrs, setPostPainNrs] = useState<number>(3);
   const [chiefComplaint, setChiefComplaint] = useState('');
@@ -86,7 +101,7 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
   const [nextSessionPlan, setNextSessionPlan] = useState('');
   const [homeInstructions, setHomeInstructions] = useState('');
 
-  // Structured Exercise & Modality Flowsheet State
+  // Structured Exercise & Modality Flowsheet State (embedded in soapRecord.data.objective.flowsheet)
   const [exercises, setExercises] = useState<FlowsheetExerciseEntry[]>([]);
   const [manualTherapy, setManualTherapy] = useState<ManualTherapyFlowsheetEntry[]>([]);
   const [physicalAgents, setPhysicalAgents] = useState<PhysicalAgentFlowsheetEntry[]>([]);
@@ -98,9 +113,14 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
   const perms = ROLE_PERMISSIONS[activeStaff.role];
 
   useEffect(() => {
-    async function loadSoapAndFlowsheet() {
+    setAddendumSigner(activeStaff.nameEn);
+  }, [activeStaff.nameEn]);
+
+  useEffect(() => {
+    async function loadSoapAndAddenda() {
       if (!dek || !session.id) return;
       setIsLoading(true);
+      setSaveError(null);
       try {
         const existing = await SoapService.getSoapNoteBySession(session.id, dek);
         if (existing) {
@@ -109,6 +129,7 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
           setChiefComplaint(d.subjective?.chiefComplaint || '');
           setSymptomChanges(d.subjective?.symptomChangesSinceLastSession || '');
           setPrePainNrs(d.subjective?.painNrsScore ?? 5);
+          setPostPainNrs(d.subjective?.postSessionPainNrs ?? d.subjective?.painNrsScore ?? 3);
           setInterventionsSummary(d.objective?.dailyInterventionsSummary || '');
           setClinicalObservations(d.objective?.clinicalObservations || '');
           setClinicalImpression(d.assessment?.clinicalImpressionCurrent || '');
@@ -116,44 +137,56 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
           setPatientTolerance(d.assessment?.patientTolerance || 'well_tolerated');
           setNextSessionPlan(d.plan?.nextSessionPlan || '');
           setHomeInstructions(d.plan?.homeInstructions || '');
-          if (d.isFinalized) setIsLocked(true);
+
+          const flow = d.objective?.flowsheet;
+          setExercises(flow?.exercises || []);
+          setManualTherapy(flow?.manualTherapy || []);
+          setPhysicalAgents(flow?.physicalAgents || []);
+
+          if (d.isFinalized || session.data.status === 'finalized') {
+            setIsLocked(true);
+          }
+        } else {
+          setSoapRecord(null);
+          setExercises([]);
+          setManualTherapy([]);
+          setPhysicalAgents([]);
+          setIsLocked(session.data.status === 'finalized');
         }
 
-        const storedFlow = ClinicOperationsService.getSessionFlowsheet(session.id);
-        if (storedFlow) {
-          setPrePainNrs(storedFlow.preSessionPainNrs);
-          setPostPainNrs(storedFlow.postSessionPainNrs);
-          setExercises(storedFlow.exercises || []);
-          setManualTherapy(storedFlow.manualTherapy || []);
-          setPhysicalAgents(storedFlow.physicalAgents || []);
-        }
+        const existingAddenda = await SoapService.getAddendaBySession(session.id, dek);
+        setAddenda(existingAddenda);
       } catch (err) {
         console.error('Failed to load session note:', err);
       } finally {
         setIsLoading(false);
       }
     }
-    loadSoapAndFlowsheet();
-  }, [session.id, dek]);
+    loadSoapAndAddenda();
+  }, [session.id, session.data.status, dek]);
 
-  const handleCarryForwardPreviousFlowsheet = () => {
-    if (isLocked) return;
-    const prev = ClinicOperationsService.getLatestEpisodeFlowsheet(session.episodeId);
+  const handleCarryForwardPreviousFlowsheet = async () => {
+    if (isLocked || !dek) return;
+    const prev = await SoapService.getLatestEpisodeFlowsheet(
+      session.episodeId,
+      session.id,
+      dek
+    );
     if (prev) {
       setExercises(
-        prev.exercises.map((e) => ({
+        (prev.exercises || []).map((e) => ({
           ...e,
           id: `flow_ex_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
         }))
       );
       setManualTherapy(
-        prev.manualTherapy.map((m) => ({
+        (prev.manualTherapy || []).map((m) => ({
           ...m,
           id: `flow_mt_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
         }))
       );
       setPhysicalAgents(
-        prev.physicalAgents.map((p) => ({
+        (prev.physicalAgents || []).map((p) => ({
           ...p,
           id: `flow_pa_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
         }))
@@ -229,35 +262,34 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
   };
 
   const handleSaveSession = async (finalizeAndLock = false) => {
-    if (!dek) return;
+    if (!dek || isLocked) return;
     setIsSaving(true);
+    setSaveError(null);
     try {
-      const flowsheetPayload: SessionFlowsheetData = {
-        preSessionPainNrs: prePainNrs,
-        postSessionPainNrs: postPainNrs,
+      const flowsheetPayload: SoapFlowsheetData = {
         exercises,
         manualTherapy,
         physicalAgents,
       };
-      ClinicOperationsService.saveSessionFlowsheet(
-        session.id,
-        session.episodeId,
-        flowsheetPayload
-      );
 
       const compiledSummary = compileFlowsheetSummaryText();
 
       const soapPayload: SoapNoteData = {
+        soapSchemaVersion: CURRENT_SOAP_SCHEMA_VERSION,
         subjective: {
+          ...(soapRecord?.data.subjective || {}),
           chiefComplaint:
             chiefComplaint || (isAr ? 'متابعة علاجية مستمرة' : 'Routine follow-up session'),
           symptomChangesSinceLastSession: symptomChanges,
           painNrsScore: prePainNrs,
+          postSessionPainNrs: postPainNrs,
           painVasCurrent: prePainNrs,
         },
         objective: {
           ...(soapRecord?.data.objective || {}),
-          dailyInterventionsSummary: compiledSummary,
+          flowsheet: flowsheetPayload,
+          dailyInterventionsSummary:
+            compiledSummary || (isAr ? 'تقييم ومتابعة سريرية' : 'Clinical evaluation & follow-up'),
           clinicalObservations,
         },
         assessment: {
@@ -275,36 +307,30 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
             (isAr ? 'الاستمرار في التدرج الحركي وخطة التأهيل' : 'Continue progressive rehab plan'),
           homeInstructions,
         },
-        isFinalized: finalizeAndLock,
-        finalizedAt: finalizeAndLock ? new Date().toISOString() : undefined,
-        finalizedBy: finalizeAndLock ? activeStaff.nameEn : undefined,
+        isFinalized: false,
       };
 
+      let savedSoap: SoapNoteRecord;
       if (soapRecord) {
-        const updated = await SoapService.updateSoapNote(soapRecord.id, soapPayload, dek);
-        setSoapRecord(updated);
+        savedSoap = await SoapService.updateSoapNote(soapRecord.id, soapPayload, dek);
       } else {
-        const created = await SoapService.createSoapNote(
+        savedSoap = await SoapService.createSoapNote(
           patientId,
           session.episodeId,
           session.id,
           soapPayload,
           dek
         );
-        setSoapRecord(created);
       }
+      setSoapRecord(savedSoap);
 
       if (finalizeAndLock) {
-        await SessionService.updateSession(
-          session.id,
-          {
-            ...session.data,
-            status: 'finalized',
-            finalizedAt: new Date().toISOString(),
-            finalizedBy: activeStaff.nameEn,
-          },
-          dek
-        );
+        // Atomic single-transaction finalization of BOTH session and soapNote
+        await SessionService.finalizeSession(session.id, activeStaff.nameEn, dek);
+        const finalizedSoap = await SoapService.getSoapNoteBySession(session.id, dek);
+        if (finalizedSoap) {
+          setSoapRecord(finalizedSoap);
+        }
         setIsLocked(true);
         ClinicOperationsService.appendAuditLog({
           actionType: 'session_finalized',
@@ -318,10 +344,45 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onSessionUpdated();
-    } catch (err) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save treatment session';
+      setSaveError(msg);
       console.error('Failed to save treatment session:', err);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleAddAddendum = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dek || !soapRecord) return;
+    setAddendumError(null);
+    setIsSavingAddendum(true);
+    try {
+      const created = await SoapService.addClinicalAddendum(
+        session.id,
+        'soapNotes',
+        soapRecord.id,
+        {
+          reasonForAmendment: addendumReason,
+          amendmentText: addendumText,
+          signedByTherapistName: addendumSigner || activeStaff.nameEn,
+        },
+        dek
+      );
+      setAddenda((prev) => [...prev, created]);
+      setAddendumText('');
+      ClinicOperationsService.appendAuditLog({
+        actionType: 'addendum_signed',
+        entityType: 'session',
+        entityId: session.id,
+        summaryAr: `إضافة ملحق تصحيحي معتمد للجلسة #${session.data.sessionNumber}`,
+        summaryEn: `Appended signed clinical addendum to Session #${session.data.sessionNumber}`,
+      });
+    } catch (err: unknown) {
+      setAddendumError(err instanceof Error ? err.message : 'Failed to append addendum');
+    } finally {
+      setIsSavingAddendum(false);
     }
   };
 
@@ -597,7 +658,11 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
                           value={ex.rpeOrPainResponse}
                           onChange={(e) => {
                             const next = [...exercises];
-                            next[idx] = { ...ex, rpeOrPainResponse: e.target.value as any };
+                            next[idx] = {
+                              ...ex,
+                              rpeOrPainResponse:
+                                e.target.value as FlowsheetExerciseEntry['rpeOrPainResponse'],
+                            };
                             setExercises(next);
                           }}
                           className="w-full px-2 py-1 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800"
@@ -669,7 +734,11 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
                   value={mt.gradeOrIntensity}
                   onChange={(e) => {
                     const next = [...manualTherapy];
-                    next[idx] = { ...mt, gradeOrIntensity: e.target.value as any };
+                    next[idx] = {
+                      ...mt,
+                      gradeOrIntensity:
+                        e.target.value as ManualTherapyFlowsheetEntry['gradeOrIntensity'],
+                    };
                     setManualTherapy(next);
                   }}
                   className="px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 font-mono"
@@ -763,6 +832,24 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
 
         {/* Subjective Changes & Assessment/Plan */}
         <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+          {saveError && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
+
+          {soapRecord?.data.repairedDuringMigration && (
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0" />
+              <span>
+                {isAr
+                  ? 'تم إصلاح ومزامنة قفل الاعتماد لهذه الملاحظة تلقائياً أثناء الترحيل بناءً على حالة اعتماد الجلسة.'
+                  : 'Finalization lock on this SOAP note was automatically repaired during migration to match the finalized session.'}
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-bold text-slate-800 dark:text-white block mb-1">
@@ -793,7 +880,129 @@ export const TreatmentSessionView: React.FC<TreatmentSessionViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Append-Only Clinical Addenda Section (shown for finalized sessions) */}
+        {isLocked && (
+          <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <FilePlus2 className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {isAr
+                    ? 'الملاحق والتصحيحات السريرية المعتمدة (Append-Only Clinical Addenda)'
+                    : 'Clinical Addenda (Append-Only Post-Finalization Amendments)'}
+                </h3>
+              </div>
+              <span className="text-[11px] font-mono text-slate-500">
+                {addenda.length} {isAr ? 'ملحق' : 'addenda'}
+              </span>
+            </div>
+
+            {addenda.length > 0 && (
+              <div className="space-y-2.5">
+                {addenda.map((item) => {
+                  const reasonInfo = ADDENDUM_REASONS[item.data.reasonForAmendment];
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5 text-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span className="font-bold text-teal-700 dark:text-teal-400">
+                          {isAr ? reasonInfo?.ar : reasonInfo?.en}
+                        </span>
+                        <span className="font-mono">
+                          {item.data.signedByTherapistName} ·{' '}
+                          {formatClinicalDate(item.createdAt, language, { includeTime: true })}
+                        </span>
+                      </div>
+                      <p className="text-slate-800 dark:text-slate-200 whitespace-pre-wrap">
+                        {item.data.amendmentText}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {soapRecord && (
+              <form onSubmit={handleAddAddendum} className="space-y-3 pt-2">
+                {addendumError && (
+                  <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300">
+                    {addendumError}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                      {isAr ? 'سبب الملحق السريري:' : 'Reason for Addendum:'}
+                    </label>
+                    <select
+                      value={addendumReason}
+                      onChange={(e) => setAddendumReason(e.target.value as AddendumReason)}
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                    >
+                      {(Object.keys(ADDENDUM_REASONS) as AddendumReason[]).map((key) => (
+                        <option key={key} value={key}>
+                          {isAr ? ADDENDUM_REASONS[key].ar : ADDENDUM_REASONS[key].en}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                      {isAr ? 'توقيع المعالج المعتمد:' : 'Signed By Clinician:'}
+                    </label>
+                    <input
+                      type="text"
+                      value={addendumSigner}
+                      onChange={(e) => setAddendumSigner(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                    {isAr
+                      ? 'نص الإضافة أو التصحيح السريري (لا يعدل النص الأصلي بل يُلحق به):'
+                      : 'Addendum Text (appended immutably):'}
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={addendumText}
+                    onChange={(e) => setAddendumText(e.target.value)}
+                    required
+                    placeholder={
+                      isAr
+                        ? 'اكتب تفاصيل الإضافة أو التوضيح السريري هنا...'
+                        : 'Enter clinical addendum details...'
+                    }
+                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={isSavingAddendum || !addendumText.trim()}
+                    className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>
+                      {isAr ? 'إدراج واعتماد الملحق السريري' : 'Sign & Append Addendum'}
+                    </span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 };
+

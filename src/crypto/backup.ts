@@ -7,11 +7,13 @@ import {
   CLINICAL_STORES_REGISTRY,
   extractAndValidateParentIds,
   validateSnapshotReferentialIntegrity,
+  type SnapshotEntityRecord,
 } from '../db/registry';
 import { broadcastVaultEvent } from '../utils/vaultEvents';
 import { registerTestHooks } from '../utils/testHooks';
 import type { VaultMetaEntity, BackupHeader, EpisodeSequenceEntity } from '../types/clinical';
 import {
+  subtle,
   deriveBackupKeys,
   wrapDEKForBackup,
   unwrapDEKFromBackup,
@@ -71,10 +73,11 @@ export const BACKUP_WARNING_THRESHOLD_BYTES = 20 * 1024 * 1024; // 20 MB (80% of
  * cipher `iv` parameter directly — not in the AAD — per AES-GCM specification. The AAD
  * authenticates all security-relevant header metadata orthogonally to the cipher IV.
  */
-export const buildCanonicalBackupHeaderAAD = (header: BackupHeader | any): Uint8Array => {
-  if (!header || typeof header !== 'object') {
+export const buildCanonicalBackupHeaderAAD = (untrustedHeader: BackupHeader | Record<string, unknown>): Uint8Array => {
+  if (!untrustedHeader || typeof untrustedHeader !== 'object') {
     throw new BackupHeaderValidationError('ترويسة النسخة الاحتياطية مفقودة أو غير صالحة لبناء AAD.');
   }
+  const header = untrustedHeader as Record<string, unknown>;
 
   // Strict check: No silent default fallbacks hiding missing or incomplete fields
   const requiredFields = [
@@ -117,13 +120,13 @@ export const buildCanonicalBackupHeaderAAD = (header: BackupHeader | any): Uint8
     kdfIterations: Number(header.kdfIterations),
     keyExpansion: header.keyExpansion,
     hkdfHash: String(header.hkdfHash),
-    hkdfSalt: Array.from(header.hkdfSalt),
+    hkdfSalt: Array.from(header.hkdfSalt as ArrayLike<number>),
     hkdfInfoDekWrap: header.hkdfInfoDekWrap,
     hkdfInfoPayloadEnc: header.hkdfInfoPayloadEnc,
     derivedKeyLengthBits: Number(header.derivedKeyLengthBits),
-    backupSalt: Array.from(header.backupSalt),
-    backupDekIv: Array.from(header.backupDekIv),
-    backupWrappedDek: Array.from(header.backupWrappedDek),
+    backupSalt: Array.from(header.backupSalt as ArrayLike<number>),
+    backupDekIv: Array.from(header.backupDekIv as ArrayLike<number>),
+    backupWrappedDek: Array.from(header.backupWrappedDek as ArrayLike<number>),
     dekVersion: Number(header.dekVersion),
     encryptionInvocationCount: Number(header.encryptionInvocationCount),
     maxBackupSizeBytes: Number(header.maxBackupSizeBytes),
@@ -206,7 +209,8 @@ export const inspectBackupPreview = async (
     throw new BackupHeaderValidationError('حزمة النسخة الاحتياطية غير صالحة.');
   }
 
-  if (!pkg.payloadCiphertext || (!Array.isArray((pkg as any).payloadCiphertext) && !((pkg as any).payloadCiphertext instanceof Uint8Array))) {
+  const rawPayloadCipher = (pkg as unknown as Record<string, unknown>).payloadCiphertext;
+  if (!rawPayloadCipher || (!Array.isArray(rawPayloadCipher) && !(rawPayloadCipher instanceof Uint8Array))) {
     throw new BackupHeaderValidationError('حقل النص المشفر للحمولة (payloadCiphertext) مفقود أو غير صالح.');
   }
   if (pkg.payloadCiphertext.length < 16) {
@@ -239,9 +243,9 @@ export const inspectBackupPreview = async (
     payloadCiphertext
   );
 
-  let snapshot: any;
+  let snapshot: Record<string, unknown[]>;
   try {
-    snapshot = JSON.parse(decryptedPayloadJson);
+    snapshot = JSON.parse(decryptedPayloadJson) as Record<string, unknown[]>;
   } catch {
     throw new Error('فشل قراءة حمولة السجلات السريرية في النسخة.');
   }
@@ -290,15 +294,15 @@ export const exportBackupPackage = async (
 ): Promise<string> => {
   // 1. Fetch encrypted clinical records for all registered clinical stores
   // vaultMeta is deliberately EXCLUDED as a device-specific store.
-  const snapshot: Record<string, any[]> = {};
+  const snapshot: Record<string, Record<string, unknown>[]> = {};
   for (const storeDef of Object.values(CLINICAL_STORES_REGISTRY)) {
-    const table = (database as any)[storeDef.name];
+    const table = database.table<Record<string, unknown>, string>(storeDef.name);
     if (table) {
       const records = await table.toArray();
-      snapshot[storeDef.name] = records.map((r: any) => ({
+      snapshot[storeDef.name] = records.map((r) => ({
         ...r,
-        iv: Array.from(r.iv),
-        ciphertext: Array.from(r.ciphertext),
+        iv: Array.from(r.iv as ArrayLike<number>),
+        ciphertext: Array.from(r.ciphertext as ArrayLike<number>),
       }));
     }
   }
@@ -415,7 +419,8 @@ export const restoreBackupPackage = async (
     throw new BackupHeaderValidationError('حزمة النسخة الاحتياطية غير صالحة.');
   }
 
-  if (!pkg.payloadCiphertext || (!Array.isArray((pkg as any).payloadCiphertext) && !((pkg as any).payloadCiphertext instanceof Uint8Array))) {
+  const rawPayloadCipher = (pkg as unknown as Record<string, unknown>).payloadCiphertext;
+  if (!rawPayloadCipher || (!Array.isArray(rawPayloadCipher) && !(rawPayloadCipher instanceof Uint8Array))) {
     throw new BackupHeaderValidationError('حقل النص المشفر للحمولة (payloadCiphertext) مفقود أو غير صالح.');
   }
   if (pkg.payloadCiphertext.length < 16) {
@@ -459,9 +464,16 @@ export const restoreBackupPackage = async (
   );
 
   // STEP 5: Validate decrypted snapshot records and strict referential integrity
-  let snapshot: any;
+  type SerializedEncryptedRecord = SnapshotEntityRecord & {
+    id: string;
+    iv: number[] | Uint8Array;
+    ciphertext: number[] | Uint8Array;
+    recordCryptoVersion?: number;
+    dekVersion?: number;
+  };
+  let snapshot: Record<string, SerializedEncryptedRecord[]>;
   try {
-    snapshot = JSON.parse(decryptedPayloadJson);
+    snapshot = JSON.parse(decryptedPayloadJson) as Record<string, SerializedEncryptedRecord[]>;
   } catch {
     throw new Error('فشل قراءة حمولة السجلات السريرية بعد فك التشفير.');
   }
@@ -470,9 +482,9 @@ export const restoreBackupPackage = async (
   validateSnapshotReferentialIntegrity(snapshot);
 
   // STEP 6: Import source DEK as temporary decryptor
-  const sourceDek = await crypto.subtle.importKey(
+  const sourceDek = await subtle.importKey(
     'raw',
-    rawDek as BufferSource,
+    rawDek,
     { name: 'AES-GCM', length: 256 },
     false,
     ['decrypt']
@@ -490,15 +502,15 @@ export const restoreBackupPackage = async (
 
   const newWrappedDekIv = randomBytes(CONSTANTS.IV_BYTES);
   const wrapAad = new TextEncoder().encode('vault-dek-wrap:v1.1');
-  const cipherBuffer = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: newWrappedDekIv as BufferSource, additionalData: wrapAad as BufferSource },
+  const cipherBuffer = await subtle.encrypt(
+    { name: 'AES-GCM', iv: newWrappedDekIv, additionalData: wrapAad },
     destinationVaultKek,
-    freshRawDek as BufferSource
+    freshRawDek
   );
 
-  const destinationOperationalDek = await crypto.subtle.importKey(
+  const destinationOperationalDek = await subtle.importKey(
     'raw',
-    freshRawDek as BufferSource,
+    freshRawDek,
     { name: 'AES-GCM', length: 256 },
     false, // strictly NON-EXTRACTABLE
     ['encrypt', 'decrypt']
@@ -516,8 +528,15 @@ export const restoreBackupPackage = async (
 
   // STEP 8: Staging In-Memory Counter & Re-encryption across all registered clinical stores
   // The staging counter starts at zero and tracks every AES-GCM invocation under fresh DEK.
+  type StagedEncryptedRecord = SnapshotEntityRecord & {
+    id: string;
+    iv: Uint8Array;
+    ciphertext: Uint8Array;
+    recordCryptoVersion: number;
+    dekVersion: number;
+  };
   let stagingInvocationCount = 0;
-  const stagedStores: Record<string, any[]> = {};
+  const stagedStores: Record<string, StagedEncryptedRecord[]> = {};
   const restoredSessionsByEpisode = new Map<string, number[]>();
 
   try {
@@ -533,7 +552,7 @@ export const restoreBackupPackage = async (
 
           // Decrypt from source DEK (authenticating source dekVersion in AAD)
           const sourceDekVersion = r.dekVersion || header.dekVersion || CURRENT_DEK_VERSION;
-          const clinicalData = await decryptRecordPayload(
+          const clinicalData = await decryptRecordPayload<Record<string, unknown>>(
             sourceDek,
             storeName,
             r.id,
@@ -545,7 +564,7 @@ export const restoreBackupPackage = async (
           );
 
           // Track restored session numbers per episode for sequence table reconstruction
-          const sessionNum = (clinicalData as any)?.sessionNumber;
+          const sessionNum = clinicalData?.sessionNumber;
           if (storeName === 'sessions' && r.episodeId && sessionNum !== undefined) {
             if (!restoredSessionsByEpisode.has(r.episodeId)) {
               restoredSessionsByEpisode.set(r.episodeId, []);
@@ -572,7 +591,7 @@ export const restoreBackupPackage = async (
           );
 
           // Preserve original entity attributes while attaching new cryptographic wrapper
-          const stagedEntity: any = {
+          const stagedEntity: StagedEncryptedRecord = {
             ...r,
             recordCryptoVersion: r.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
             dekVersion: newDekVersion,
@@ -591,7 +610,9 @@ export const restoreBackupPackage = async (
       const storeName = storeDef.name;
       const stagedList = stagedStores[storeName] || [];
       for (const sr of stagedList) {
-        const parentIds = storeDef.parentKeys.map(k => sr[k]).filter(Boolean);
+        const parentIds = storeDef.parentKeys
+          .map((k) => sr[k])
+          .filter((v): v is string => typeof v === 'string' && Boolean(v));
         await decryptRecordPayload(
           destinationOperationalDek,
           storeName,
@@ -628,7 +649,7 @@ export const restoreBackupPackage = async (
     // the pre-validated in-memory staged records entirely within targetDatabase.
     const tablesToLock = [
       ...Object.keys(CLINICAL_STORES_REGISTRY)
-        .map(name => (targetDatabase as any)[name])
+        .map((name) => targetDatabase.table(name))
         .filter(Boolean),
       targetDatabase.vaultMeta,
       ...(targetDatabase.episodeSequences ? [targetDatabase.episodeSequences] : []),
@@ -640,7 +661,7 @@ export const restoreBackupPackage = async (
       async () => {
         // 1. Clear existing destination data for all registered clinical stores
         for (const storeDef of Object.values(CLINICAL_STORES_REGISTRY)) {
-          const table = (targetDatabase as any)[storeDef.name];
+          const table = targetDatabase.table(storeDef.name);
           if (table) {
             await table.clear();
           }
@@ -654,7 +675,7 @@ export const restoreBackupPackage = async (
 
         // 2. Insert verified re-encrypted entities
         for (const storeDef of Object.values(CLINICAL_STORES_REGISTRY)) {
-          const table = (targetDatabase as any)[storeDef.name];
+          const table = targetDatabase.table(storeDef.name);
           const stagedList = stagedStores[storeDef.name];
           if (table && stagedList && stagedList.length > 0) {
             await table.bulkPut(stagedList);

@@ -77,7 +77,7 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
   const [specialTests, setSpecialTests] = useState<OrthopedicSpecialTestItem[]>([]);
   const [gaitPosture, setGaitPosture] = useState<GaitPostureData | undefined>(undefined);
   const [functionalScales, setFunctionalScales] = useState<FunctionalScaleEntry | undefined>(undefined);
-  const [customWidgetsData, setCustomWidgetsData] = useState<Record<string, any>>({});
+  const [customWidgetsData, setCustomWidgetsData] = useState<Record<string, Record<string, unknown>>>({});
   const [clinicalImpression, setClinicalImpression] = useState('');
   const [progressStatus, setProgressStatus] = useState<'improved' | 'unchanged' | 'regressed' | 'plateau'>('improved');
   const [patientTolerance, setPatientTolerance] = useState<'well_tolerated' | 'moderate_fatigue' | 'poorly_tolerated'>('well_tolerated');
@@ -184,9 +184,8 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       onSessionUpdated();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to save SOAP note:', err);
-      alert(err.message || 'Error saving session note');
     } finally {
       setIsSaving(false);
     }
@@ -306,12 +305,14 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
 
       {/* Workspace Tabs Navigation */}
       <div className="px-6 border-b border-slate-800 bg-slate-900/90 flex items-center gap-2 shrink-0 overflow-x-auto scrollbar-none">
-        {[
-          { id: 'objective', labelAr: 'O: الفحص السريري ورف الأدوات', labelEn: 'Objective & Exam Shelf', icon: Activity, count: activeWidgetIds.length },
-          { id: 'subjective', labelAr: 'S: شكوى المريض والأعراض', labelEn: 'Subjective Narrative', icon: FileText },
-          { id: 'assessment', labelAr: 'A: التقييم والتقدم السريري', labelEn: 'Assessment & Impression', icon: Sparkles },
-          { id: 'plan', labelAr: 'P: خطة العلاج والتمارين', labelEn: 'Plan & Next Session', icon: Send },
-        ].map((tab) => {
+        {(
+          [
+            { id: 'objective', labelAr: 'O: الفحص السريري ورف الأدوات', labelEn: 'Objective & Exam Shelf', icon: Activity, count: activeWidgetIds.length },
+            { id: 'subjective', labelAr: 'S: شكوى المريض والأعراض', labelEn: 'Subjective Narrative', icon: FileText },
+            { id: 'assessment', labelAr: 'A: التقييم والتقدم السريري', labelEn: 'Assessment & Impression', icon: Sparkles },
+            { id: 'plan', labelAr: 'P: خطة العلاج والتمارين', labelEn: 'Plan & Next Session', icon: Send },
+          ] as const
+        ).map((tab) => {
           const Icon = tab.icon;
           const isSelected = activeTab === tab.id;
 
@@ -319,7 +320,7 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-3 text-xs font-bold border-b-2 flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
                 isSelected
                   ? 'text-teal-400 border-teal-500 bg-slate-850/60'
@@ -328,7 +329,7 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
             >
               <Icon className="w-4 h-4" />
               <span>{isAr ? tab.labelAr : tab.labelEn}</span>
-              {tab.count !== undefined && (
+              {'count' in tab && tab.count !== undefined && (
                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono bg-teal-950 text-teal-300 border border-teal-800">
                   {tab.count}
                 </span>
@@ -529,7 +530,11 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
                   </label>
                   <select
                     value={progressStatus}
-                    onChange={(e) => setProgressStatus(e.target.value as any)}
+                    onChange={(e) =>
+                      setProgressStatus(
+                        e.target.value as 'improved' | 'unchanged' | 'regressed' | 'plateau'
+                      )
+                    }
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-750 text-white font-medium"
                   >
                     <option value="improved">{isAr ? 'تحسن ملحوظ (Improved)' : 'Improved'}</option>
@@ -545,7 +550,11 @@ export const ClinicalSessionWorkspace: React.FC<ClinicalSessionWorkspaceProps> =
                   </label>
                   <select
                     value={patientTolerance}
-                    onChange={(e) => setPatientTolerance(e.target.value as any)}
+                    onChange={(e) =>
+                      setPatientTolerance(
+                        e.target.value as 'well_tolerated' | 'moderate_fatigue' | 'poorly_tolerated'
+                      )
+                    }
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-750 text-white font-medium"
                   >
                     <option value="well_tolerated">{isAr ? 'تحمل ممتاز ودون مضاعفات (Well Tolerated)' : 'Well Tolerated'}</option>

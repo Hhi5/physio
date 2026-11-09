@@ -12,6 +12,7 @@ import {
   ClinicOperationsService,
   formatIQD,
 } from '../../services/clinicOperationsService';
+import { localDate, computePatientAge } from '../../utils/date';
 import type {
   PatientRecord,
   EpisodeRecord,
@@ -204,7 +205,7 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
       id: `doc_${Date.now()}`,
       title: newAttachmentTitle.trim(),
       category: newAttachmentCategory,
-      dateAdded: new Date().toISOString().split('T')[0],
+      dateAdded: localDate(),
       summaryNotes: newAttachmentSummary.trim(),
     };
     setAttachments((prev) => [item, ...prev]);
@@ -258,6 +259,9 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
                 <span>·</span>
                 <span className="tabular-nums">
                   {d.gender === 'male' ? (isAr ? 'ذكر' : 'Male') : isAr ? 'أنثى' : 'Female'}{' '}
+                  {computePatientAge(d.dateOfBirth, d.age) !== undefined
+                    ? `· ${computePatientAge(d.dateOfBirth, d.age)} ${isAr ? 'سنة' : 'yrs'} `
+                    : ''}
                   {d.dateOfBirth ? `(${d.dateOfBirth})` : ''}
                 </span>
                 {financialSummary.totalDebtIQD > 0 && (
@@ -354,42 +358,44 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
 
       {/* Tabs Navigation (5 Comprehensive Clinical & Operational Sections) */}
       <div className="px-3 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-1 shrink-0 overflow-x-auto scrollbar-none">
-        {[
-          {
-            id: 'evaluation',
-            labelAr: 'التقييم السريري الشامل (Initial Eval & Widgets)',
-            labelEn: 'Episode Assessment & Widgets',
-            icon: Layers,
-            count: episodeStore.activeWidgetIds.length,
-          },
-          {
-            id: 'comparison',
-            labelAr: 'المقارنة الطولية والتقدم (Longitudinal Matrix)',
-            labelEn: 'Longitudinal Comparison & Charts',
-            icon: TrendingUp,
-            count: episodeStore.snapshots.length,
-          },
-          {
-            id: 'hep',
-            labelAr: 'الخطة والأهداف والبرنامج المنزلي (HEP & Goals)',
-            labelEn: 'Goals, Plan of Care & HEP',
-            icon: Dumbbell,
-            count: episodeStore.hepProgram.length,
-          },
-          {
-            id: 'sessions',
-            labelAr: 'سجل الجلسات العلاجية (Treatment Sessions)',
-            labelEn: 'Treatment Sessions',
-            icon: Clock,
-            count: episodeSessions.length,
-          },
-          {
-            id: 'profile',
-            labelAr: 'ملف المريض العام والمرفقات والحسابات (IQD)',
-            labelEn: 'Patient Hub, Meds & IQD Ledger',
-            icon: FileText,
-          },
-        ].map((tab) => {
+        {(
+          [
+            {
+              id: 'evaluation',
+              labelAr: 'التقييم السريري الشامل (Initial Eval & Widgets)',
+              labelEn: 'Episode Assessment & Widgets',
+              icon: Layers,
+              count: episodeStore.activeWidgetIds.length,
+            },
+            {
+              id: 'comparison',
+              labelAr: 'المقارنة الطولية والتقدم (Longitudinal Matrix)',
+              labelEn: 'Longitudinal Comparison & Charts',
+              icon: TrendingUp,
+              count: episodeStore.snapshots.length,
+            },
+            {
+              id: 'hep',
+              labelAr: 'الخطة والأهداف والبرنامج المنزلي (HEP & Goals)',
+              labelEn: 'Goals, Plan of Care & HEP',
+              icon: Dumbbell,
+              count: episodeStore.hepProgram.length,
+            },
+            {
+              id: 'sessions',
+              labelAr: 'سجل الجلسات العلاجية (Treatment Sessions)',
+              labelEn: 'Treatment Sessions',
+              icon: Clock,
+              count: episodeSessions.length,
+            },
+            {
+              id: 'profile',
+              labelAr: 'ملف المريض العام والمرفقات والحسابات (IQD)',
+              labelEn: 'Patient Hub, Meds & IQD Ledger',
+              icon: FileText,
+            },
+          ] as const
+        ).map((tab) => {
           const Icon = tab.icon;
           const isSelected = activeTab === tab.id;
 
@@ -397,7 +403,7 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id)}
               className={`px-3.5 py-3 text-xs font-bold border-b-2 flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
                 isSelected
                   ? 'text-teal-700 dark:text-teal-400 border-teal-600 dark:border-teal-500 bg-teal-50/30 dark:bg-slate-850/60'
@@ -406,7 +412,7 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
             >
               <Icon className="w-4 h-4" />
               <span>{isAr ? tab.labelAr : tab.labelEn}</span>
-              {tab.count !== undefined && (
+              {'count' in tab && tab.count !== undefined && (
                 <span className="text-[11px] font-mono tabular-nums text-teal-600 dark:text-teal-400">
                   ({tab.count})
                 </span>
@@ -1031,7 +1037,11 @@ export const MasterPatientChart: React.FC<MasterPatientChartProps> = ({
                 />
                 <select
                   value={newAttachmentCategory}
-                  onChange={(e) => setNewAttachmentCategory(e.target.value as any)}
+                  onChange={(e) =>
+                    setNewAttachmentCategory(
+                      e.target.value as PatientDocumentAttachment['category']
+                    )
+                  }
                   className="px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white"
                 >
                   <option value="imaging_mri_xray">{isAr ? 'تقرير رنين / أشعة (MRI/X-Ray)' : 'Imaging (MRI/X-Ray)'}</option>

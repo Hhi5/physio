@@ -1,6 +1,6 @@
 {
   "name": "PhysioRecord - Clinical Physical Therapy EHR",
-  "description": "Encrypted, modular clinical physical therapy practice management system with interactive examination widgets, anatomical body charting, and AI customization.",
+  "description": "Encrypted local-first clinical physical therapy EHR with episodes of care, SOAP documentation, body chart, ROM/MMT, and neurological screening.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

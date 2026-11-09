@@ -18,6 +18,14 @@ import type {
   EpisodeStatus,
   ClinicalSpecialty,
 } from '../types/clinical';
+import { localDate } from '../utils/date';
+
+interface LegacyEncryptedEpisodeEntity extends EncryptedEpisodeEntity {
+  status?: EpisodeStatus;
+  primarySpecialty?: ClinicalSpecialty;
+  startDate?: string;
+  endDate?: string;
+}
 
 export class EpisodeService {
   /**
@@ -55,10 +63,11 @@ export class EpisodeService {
           entity.dekVersion || CURRENT_DEK_VERSION
         );
 
-        const status: EpisodeStatus = decryptedData.status || (entity as any).status || 'active';
-        const primarySpecialty: ClinicalSpecialty = decryptedData.primarySpecialty || (entity as any).primarySpecialty || 'general';
-        const startDate: string = decryptedData.startDate || decryptedData.onsetDate || (entity as any).startDate || entity.createdAt.split('T')[0];
-        const endDate: string | undefined = decryptedData.endDate || (entity as any).endDate;
+        const legacyEntity = entity as LegacyEncryptedEpisodeEntity;
+        const status: EpisodeStatus = decryptedData.status || legacyEntity.status || 'active';
+        const primarySpecialty: ClinicalSpecialty = decryptedData.primarySpecialty || legacyEntity.primarySpecialty || 'general';
+        const startDate: string = decryptedData.startDate || decryptedData.onsetDate || legacyEntity.startDate || localDate(entity.createdAt);
+        const endDate: string | undefined = decryptedData.endDate || legacyEntity.endDate;
 
         records.push({
           id: entity.id,
@@ -114,10 +123,11 @@ export class EpisodeService {
       entity.dekVersion || CURRENT_DEK_VERSION
     );
 
-    const status: EpisodeStatus = decryptedData.status || (entity as any).status || 'active';
-    const primarySpecialty: ClinicalSpecialty = decryptedData.primarySpecialty || (entity as any).primarySpecialty || 'general';
-    const startDate: string = decryptedData.startDate || decryptedData.onsetDate || (entity as any).startDate || entity.createdAt.split('T')[0];
-    const endDate: string | undefined = decryptedData.endDate || (entity as any).endDate;
+    const legacyEntity = entity as LegacyEncryptedEpisodeEntity;
+    const status: EpisodeStatus = decryptedData.status || legacyEntity.status || 'active';
+    const primarySpecialty: ClinicalSpecialty = decryptedData.primarySpecialty || legacyEntity.primarySpecialty || 'general';
+    const startDate: string = decryptedData.startDate || decryptedData.onsetDate || legacyEntity.startDate || localDate(entity.createdAt);
+    const endDate: string | undefined = decryptedData.endDate || legacyEntity.endDate;
 
     return {
       id: entity.id,
@@ -189,7 +199,7 @@ export class EpisodeService {
     const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
 
     const now = new Date().toISOString();
-    const startDate = data.startDate || data.onsetDate || now.split('T')[0];
+    const startDate = data.startDate || data.onsetDate || localDate();
     const status: EpisodeStatus = data.status || 'active';
     const primarySpecialty = data.primarySpecialty;
 
@@ -326,7 +336,7 @@ export class EpisodeService {
     const now = new Date().toISOString();
     let endDate = existing.endDate;
     if (newStatus === 'completed' && !endDate) {
-      endDate = now.split('T')[0];
+      endDate = localDate();
     } else if (newStatus === 'active') {
       endDate = undefined; // Re-opened
     }
@@ -404,7 +414,7 @@ export class EpisodeService {
     const updatedData: EpisodeClinicalData = {
       ...existing.data,
       status: 'completed',
-      endDate: dischargeInfo.endDate || now.split('T')[0],
+      endDate: dischargeInfo.endDate || localDate(),
       dischargeSummary: dischargeInfo.dischargeSummary.trim(),
       dischargeCriteriaSummary: dischargeInfo.dischargeCriteriaSummary?.trim(),
     };

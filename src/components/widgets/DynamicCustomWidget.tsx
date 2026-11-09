@@ -10,8 +10,8 @@ import { Sparkles, Info, CheckCircle2 } from 'lucide-react';
 
 interface DynamicCustomWidgetProps {
   definition: CustomWidgetDefinition;
-  value: Record<string, any> | undefined;
-  onChange: (updated: Record<string, any>) => void;
+  value: Record<string, unknown> | undefined;
+  onChange: (updated: Record<string, unknown>) => void;
   readOnly?: boolean;
 }
 
@@ -21,10 +21,10 @@ export const DynamicCustomWidget: React.FC<DynamicCustomWidgetProps> = ({
   onChange,
   readOnly = false,
 }) => {
-  const { language, isRtl } = useLanguage();
+  const { language } = useLanguage();
   const isAr = language === 'ar';
 
-  const handleFieldChange = (fieldId: string, val: any) => {
+  const handleFieldChange = (fieldId: string, val: unknown) => {
     if (readOnly) return;
     onChange({
       ...value,
@@ -112,12 +112,12 @@ export const DynamicCustomWidget: React.FC<DynamicCustomWidgetProps> = ({
                     max={field.max ?? 10}
                     step={field.step ?? 1}
                     disabled={readOnly}
-                    value={val ?? 0}
+                    value={typeof val === 'number' ? val : 0}
                     onChange={(e) => handleFieldChange(field.id, Number(e.target.value))}
                     className="w-full accent-teal-600"
                   />
                   <span className="w-10 text-center font-bold font-mono text-xs text-teal-600 dark:text-teal-400">
-                    {val ?? 0}
+                    {typeof val === 'number' ? val : 0}
                   </span>
                 </div>
               )}
@@ -130,7 +130,7 @@ export const DynamicCustomWidget: React.FC<DynamicCustomWidgetProps> = ({
                   max={field.max}
                   step={field.step}
                   disabled={readOnly}
-                  value={val ?? ''}
+                  value={typeof val === 'number' || typeof val === 'string' ? val : ''}
                   onChange={(e) =>
                     handleFieldChange(field.id, e.target.value === '' ? null : Number(e.target.value))
                   }
@@ -167,7 +167,7 @@ export const DynamicCustomWidget: React.FC<DynamicCustomWidgetProps> = ({
                 <textarea
                   rows={2}
                   disabled={readOnly}
-                  value={val ?? ''}
+                  value={typeof val === 'string' ? val : ''}
                   onChange={(e) => handleFieldChange(field.id, e.target.value)}
                   className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white"
                 />

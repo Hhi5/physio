@@ -20,13 +20,25 @@ import {
   CannotDeleteFinalizedRecordError,
   VaultGenerationChangedError,
   UnboundVaultKeyError,
+  CURRENT_SOAP_SCHEMA_VERSION,
   type SessionRecord,
   type SessionClinicalData,
   type EncryptedSessionEntity,
+  type SoapNoteData,
+  type EncryptedSoapEntity,
   type SessionType,
   type SessionStatus,
   type AttendanceStatus,
 } from '../types/clinical';
+import { localDate } from '../utils/date';
+
+
+interface LegacyEncryptedSessionEntity extends EncryptedSessionEntity {
+  sessionDate?: string;
+  sessionType?: SessionType;
+  sessionStatus?: SessionStatus;
+  status?: SessionStatus;
+}
 
 /**
  * Compute SHA-256 digest for content integrity verification
@@ -96,6 +108,30 @@ registerTestHooks({
 
 export class SessionService {
   /**
+   * Compute the next unique session number from an array of existing sessions in an episode.
+   * Ensures deleted drafts or manual numbers never cause a count+1 collision.
+   */
+  static computeNextSessionNumber(
+    existingSessions: Array<{ sessionNumber?: number; data?: { sessionNumber?: number } }>
+  ): number {
+    if (!existingSessions || existingSessions.length === 0) return 1;
+    const usedNumbers = new Set<number>();
+    let maxNum = 0;
+    for (const s of existingSessions) {
+      const n = Number(s.sessionNumber ?? s.data?.sessionNumber);
+      if (Number.isInteger(n) && n > 0) {
+        usedNumbers.add(n);
+        if (n > maxNum) maxNum = n;
+      }
+    }
+    let candidate = maxNum + 1;
+    while (usedNumbers.has(candidate)) {
+      candidate++;
+    }
+    return candidate;
+  }
+
+  /**
    * Fetch and decrypt all sessions belonging to a specific Episode.
    * Enforces referential integrity check: verifies episode and parent patient existence.
    * Chronologically sorts sessions by sessionNumber and sessionDate ascending.
@@ -130,13 +166,14 @@ export class SessionService {
           entity.dekVersion || CURRENT_DEK_VERSION
         );
 
+        const legacyEntity = entity as LegacyEncryptedSessionEntity;
         const sessionNumber: number = decryptedData.sessionNumber || 1;
         const sessionDate: string =
-          decryptedData.sessionDate || (entity as any).sessionDate || entity.createdAt.split('T')[0];
+          decryptedData.sessionDate || legacyEntity.sessionDate || localDate(entity.createdAt);
         const sessionType: SessionType =
-          decryptedData.sessionType || (entity as any).sessionType || 'follow_up';
+          decryptedData.sessionType || legacyEntity.sessionType || 'follow_up';
         const status: SessionStatus =
-          decryptedData.status || (entity as any).sessionStatus || (entity as any).status || 'draft';
+          decryptedData.status || legacyEntity.sessionStatus || legacyEntity.status || 'draft';
         const attendanceStatus: AttendanceStatus = decryptedData.attendanceStatus || 'attended';
 
         records.push({
@@ -205,13 +242,14 @@ export class SessionService {
       entity.dekVersion || CURRENT_DEK_VERSION
     );
 
+    const legacyEntity = entity as LegacyEncryptedSessionEntity;
     const sessionNumber: number = decryptedData.sessionNumber || 1;
     const sessionDate: string =
-      decryptedData.sessionDate || (entity as any).sessionDate || entity.createdAt.split('T')[0];
+      decryptedData.sessionDate || legacyEntity.sessionDate || localDate(entity.createdAt);
     const sessionType: SessionType =
-      decryptedData.sessionType || (entity as any).sessionType || 'follow_up';
+      decryptedData.sessionType || legacyEntity.sessionType || 'follow_up';
     const status: SessionStatus =
-      decryptedData.status || (entity as any).sessionStatus || (entity as any).status || 'draft';
+      decryptedData.status || legacyEntity.sessionStatus || legacyEntity.status || 'draft';
     const attendanceStatus: AttendanceStatus = decryptedData.attendanceStatus || 'attended';
 
     return {
@@ -267,42 +305,46 @@ export class SessionService {
 
     const boundGen = actualBoundGeneration;
 
-    // 1. If sequence record is not yet initialized, read existing sessions outside transaction to seed it
+    // 1. Always inspect existing sessions outside transaction so manual numbers and deleted drafts are reconciled
     const existingSeq = await database.episodeSequences.get(episodeId);
-    let seededTokens: string[] = [];
+    const seededTokens: string[] = [];
+    const activeSessionNumbers = new Set<number>();
     let maxSeed = 0;
 
-    if (!existingSeq) {
-      // Check vaultGeneration before reading sessions to prevent seeding with stale DEK
-      const currentMeta = await database.vaultMeta.get('auth');
-      const currentGen = currentMeta?.vaultGeneration ?? 1;
-      if (currentGen !== boundGen) {
-        throw new VaultGenerationChangedError(
-          `تم رفض حجز رقم الجلسة: تم تغيير جيل الخزينة (المفتاح الحالي ينتمي للجيل: ${boundGen}، بينما جيل الخزينة في قاعدة البيانات: ${currentGen}) بسبب عملية استعادة كاملة في تبويب آخر. يرجى إعادة فتح الخزينة بالمفتاح الصحيح.`
-        );
-      }
+    // Check vaultGeneration before reading sessions to prevent seeding with stale DEK
+    const preMeta = await database.vaultMeta.get('auth');
+    const preGen = preMeta?.vaultGeneration ?? 1;
+    if (preGen !== boundGen) {
+      throw new VaultGenerationChangedError(
+        `تم رفض حجز رقم الجلسة: تم تغيير جيل الخزينة (المفتاح الحالي ينتمي للجيل: ${boundGen}، بينما جيل الخزينة في قاعدة البيانات: ${preGen}) بسبب عملية استعادة كاملة في تبويب آخر. يرجى إعادة فتح الخزينة بالمفتاح الصحيح.`
+      );
+    }
 
-      // Read and decrypt existing sessions to discover any pre-existing numbers
-      const existingSessions = await this.getSessionsByEpisode(episodeId, dek, database);
-      for (const s of existingSessions) {
-        if (s.sessionNumber) {
-          const t = await computeSessionNumberHmacToken(dek, episodeId, s.sessionNumber);
-          seededTokens.push(t);
-          if (s.sessionNumber > maxSeed) maxSeed = s.sessionNumber;
-        }
+    const existingSessions = await this.getSessionsByEpisode(episodeId, dek, database);
+    for (const s of existingSessions) {
+      if (s.sessionNumber) {
+        activeSessionNumbers.add(s.sessionNumber);
+        const t = await computeSessionNumberHmacToken(dek, episodeId, s.sessionNumber);
+        seededTokens.push(t);
+        if (s.sessionNumber > maxSeed) maxSeed = s.sessionNumber;
       }
     }
 
-    // 2. Pre-compute HMAC tokens OUTSIDE the transaction to avoid PrematureCommitError
+    // 2. Pre-compute HMAC tokens OUTSIDE the transaction to avoid Dexie PrematureCommitError
+    //    (Web Crypto promises cannot be awaited inside an active IndexedDB transaction).
+    //    Since baseSeq = max(existingSeq.lastSequenceNumber, max(existingSessions)),
+    //    baseSeq + 1 is guaranteed free unless another browser tab reserves it concurrently
+    //    in the few milliseconds before the transaction lock is acquired.
+    const CONCURRENT_TAB_LOOKAHEAD = 8;
     let requestedToken: string | undefined;
+    const candidateTokens = new Map<number, string>();
     if (requestedNumber !== undefined) {
       requestedToken = await computeSessionNumberHmacToken(dek, episodeId, requestedNumber);
-    }
-
-    const baseSeq = existingSeq?.lastSequenceNumber || maxSeed || 0;
-    const candidateTokens = new Map<number, string>();
-    for (let c = baseSeq + 1; c <= baseSeq + 30; c++) {
-      candidateTokens.set(c, await computeSessionNumberHmacToken(dek, episodeId, c));
+    } else {
+      const baseSeq = Math.max(existingSeq?.lastSequenceNumber || 0, maxSeed);
+      for (let c = baseSeq + 1; c <= baseSeq + CONCURRENT_TAB_LOOKAHEAD; c++) {
+        candidateTokens.set(c, await computeSessionNumberHmacToken(dek, episodeId, c));
+      }
     }
 
     // 3. Execute atomic reservation inside an exclusive IndexedDB readwrite transaction
@@ -326,12 +368,22 @@ export class SessionService {
           allocatedTokens: [...seededTokens],
           updatedAt: new Date().toISOString(),
         };
+      } else {
+        // Ensure any existing sessions' tokens and maxSeed are merged into seq
+        for (const t of seededTokens) {
+          if (!seq.allocatedTokens.includes(t)) {
+            seq.allocatedTokens.push(t);
+          }
+        }
+        if (maxSeed > seq.lastSequenceNumber) {
+          seq.lastSequenceNumber = maxSeed;
+        }
       }
 
       let allocated: number;
 
       if (requestedNumber !== undefined && requestedToken !== undefined) {
-        if (seq.allocatedTokens.includes(requestedToken)) {
+        if (seq.allocatedTokens.includes(requestedToken) || activeSessionNumbers.has(requestedNumber)) {
           throw new Error(
             `رقم الجلسة #${requestedNumber} مستخدم مسبقاً في هذه الحلقة. يجب أن يكون رقم الجلسة فريداً ضمن حلقة الرعاية.`
           );
@@ -344,7 +396,10 @@ export class SessionService {
       } else {
         let candidate = seq.lastSequenceNumber + 1;
         let candidateToken = candidateTokens.get(candidate);
-        while (candidateToken && seq.allocatedTokens.includes(candidateToken)) {
+        while (
+          candidateToken &&
+          (seq.allocatedTokens.includes(candidateToken) || activeSessionNumbers.has(candidate))
+        ) {
           candidate++;
           candidateToken = candidateTokens.get(candidate);
         }
@@ -492,7 +547,7 @@ export class SessionService {
 
       try {
         const now = new Date().toISOString();
-        const sessionDate = data.sessionDate || now.split('T')[0];
+        const sessionDate = data.sessionDate || localDate();
         const sessionDurationMinutes = data.sessionDurationMinutes || 45;
         const sessionType = data.sessionType;
         const status: SessionStatus = 'draft'; // Always starts as draft
@@ -617,10 +672,18 @@ export class SessionService {
       throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
     }
 
-    // IMMUTABILITY RULE: Finalized sessions cannot be modified directly
+    // IMMUTABILITY RULE 1: Finalized sessions cannot be modified directly
     if (existing.status === 'finalized') {
       throw new Error(
         'لا يمكن تعديل جلسة سريرية معتمدة نهائياً. يسمح النظام فقط بإضافة ملحق سريري (Clinical Addendum) للتصحيح أو الاستكمال.'
+      );
+    }
+
+    // IMMUTABILITY RULE 2: Session cannot be modified if its associated SOAP note is finalized
+    const existingSoap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
+    if (existingSoap && existingSoap.data.isFinalized) {
+      throw new Error(
+        'لا يمكن تعديل جلسة سريرية مرتبطة بملاحظة SOAP معتمدة ومغلقة نهائياً.'
       );
     }
 
@@ -750,12 +813,12 @@ export class SessionService {
   }
 
   /**
-   * Finalize a Clinical Session and its associated SOAP Note.
+   * Finalize a Clinical Session and its associated SOAP Note atomically in ONE Dexie transaction.
    * Strictly enforces:
    * 1. Attended sessions MUST have a completed SOAP note before finalization.
-   * 2. Subjective chief complaint, Assessment impression, and Plan must be filled.
-   * 3. Calculates content integrity digest (SHA-256) of clinical record.
-   * 4. Locks both session and SOAP note against further direct edits.
+   * 2. Subjective chief complaint, Objective findings/flowsheet, Assessment impression, and Plan must be filled.
+   * 3. Computes SHA-256 content integrity digests and AES-256-GCM ciphertexts BEFORE opening the Dexie transaction.
+   * 4. Commits both `soapNote.isFinalized = true` and `session.status = 'finalized'` in ONE atomic Dexie transaction.
    */
   static async finalizeSession(
     sessionId: string,
@@ -767,6 +830,13 @@ export class SessionService {
       throw new Error('اسم المعالج الطبيعي المعتمد إلزامي لاعتماد السجل السريري.');
     }
 
+    const expectedGen = getDekGeneration(dek);
+    if (expectedGen === undefined) {
+      throw new UnboundVaultKeyError(
+        'تم رفض اعتماد الجلسة: مفتاح التشفير التشغيلي (DEK) غير مرتبط بأي جيل خزينة معتمد.'
+      );
+    }
+
     const session = await this.getSessionById(sessionId, dek, database);
     if (!session) {
       throw new Error(`الجلسة بالمعرف "${sessionId}" غير موجودة.`);
@@ -776,7 +846,14 @@ export class SessionService {
       throw new Error('هذه الجلسة معتمدة مسبقاً.');
     }
 
+    const now = new Date().toISOString();
+    const signer = therapistName.trim();
+    const meta = await database.vaultMeta.get('auth');
+    const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
+
     let soapDigest = '';
+    let finalizedSoapEntity: EncryptedSoapEntity | null = null;
+
     // If attended, SOAP note is mandatory and ALL 4 AXES must be addressed!
     if (session.attendanceStatus === 'attended') {
       const soap = await SoapService.getSoapNoteBySession(sessionId, dek, database);
@@ -791,22 +868,28 @@ export class SessionService {
         throw new Error('الشكوى الحالية للمريض (Chief Complaint) إلزامية في محور S لاعتماد الجلسة.');
       }
 
-      // 2. Check Axis O (Objective): Must document findings or explicitly justify not_assessed
+      // 2. Check Axis O (Objective): Must document findings, flowsheet, or explicitly justify not_assessed
       const obj = soap.data.objective;
+      const hasFlowsheetItems = Boolean(
+        obj?.flowsheet &&
+          ((obj.flowsheet.exercises && obj.flowsheet.exercises.length > 0) ||
+            (obj.flowsheet.manualTherapy && obj.flowsheet.manualTherapy.length > 0) ||
+            (obj.flowsheet.physicalAgents && obj.flowsheet.physicalAgents.length > 0))
+      );
       const hasObjectiveFindings = Boolean(
-        obj?.objectiveFindings?.trim() ||
-        obj?.clinicalObservations?.trim() ||
-        obj?.functionalOrPreliminaryMeasurements?.trim() ||
-        obj?.dailyInterventionsSummary?.trim() ||
-        (obj?.romBattery?.entries && obj.romBattery.entries.length > 0) ||
-        (obj?.mmtBattery?.entries && obj.mmtBattery.entries.length > 0) ||
-        (obj?.neuroScreening && (
-          (obj.neuroScreening.myotomes && obj.neuroScreening.myotomes.length > 0) ||
-          (obj.neuroScreening.dermatomes && obj.neuroScreening.dermatomes.length > 0) ||
-          (obj.neuroScreening.reflexes && obj.neuroScreening.reflexes.length > 0)
-        )) ||
-        obj?.isWithinNormalLimits ||
-        obj?.status === 'normal_findings'
+        hasFlowsheetItems ||
+          obj?.objectiveFindings?.trim() ||
+          obj?.clinicalObservations?.trim() ||
+          obj?.functionalOrPreliminaryMeasurements?.trim() ||
+          obj?.dailyInterventionsSummary?.trim() ||
+          (obj?.romBattery?.entries && obj.romBattery.entries.length > 0) ||
+          (obj?.mmtBattery?.entries && obj.mmtBattery.entries.length > 0) ||
+          (obj?.neuroScreening &&
+            ((obj.neuroScreening.myotomes && obj.neuroScreening.myotomes.length > 0) ||
+              (obj.neuroScreening.dermatomes && obj.neuroScreening.dermatomes.length > 0) ||
+              (obj.neuroScreening.reflexes && obj.neuroScreening.reflexes.length > 0))) ||
+          obj?.isWithinNormalLimits ||
+          obj?.status === 'normal_findings'
       );
       const isExplicitlyNotAssessed =
         obj?.status === 'not_assessed' && Boolean(obj?.notAssessedReason?.trim());
@@ -827,26 +910,59 @@ export class SessionService {
         throw new Error('الخطة للجلسة القادمة (Next Session Plan) إلزامية في محور P لاعتماد الجلسة.');
       }
 
-      // Finalize SOAP note as well
-      await SoapService.finalizeSoapNote(soap.id, therapistName.trim(), dek, database);
-      soapDigest = JSON.stringify(soap.data);
+      // Prepare finalized SOAP payload and compute SHA-256 content seal BEFORE opening Dexie transaction
+      const soapContentForSeal: SoapNoteData = {
+        ...soap.data,
+        soapSchemaVersion: soap.data.soapSchemaVersion ?? CURRENT_SOAP_SCHEMA_VERSION,
+        isFinalized: true,
+        finalizedAt: now,
+        finalizedBy: signer,
+      };
+      const soapContentSeal = await computeSha256Digest(JSON.stringify(soapContentForSeal));
+      const finalizedSoapData: SoapNoteData = {
+        ...soapContentForSeal,
+        contentDigestSha256: soapContentSeal,
+      };
+
+      const { iv: soapIv, ciphertext: soapCiphertext } =
+        await encryptRecordWithMandatoryReservation(
+          database,
+          dek,
+          'soapNotes',
+          soap.id,
+          [soap.patientId, soap.episodeId, soap.sessionId],
+          finalizedSoapData,
+          CURRENT_RECORD_CRYPTO_VERSION,
+          activeDekVersion,
+          expectedGen
+        );
+
+      finalizedSoapEntity = {
+        id: soap.id,
+        sessionId: soap.sessionId,
+        episodeId: soap.episodeId,
+        patientId: soap.patientId,
+        createdAt: soap.createdAt,
+        updatedAt: now,
+        recordCryptoVersion: CURRENT_RECORD_CRYPTO_VERSION,
+        dekVersion: activeDekVersion,
+        iv: soapIv,
+        ciphertext: soapCiphertext,
+      };
+
+      soapDigest = JSON.stringify(finalizedSoapData);
     }
 
-    const now = new Date().toISOString();
-
-    // Compute content integrity digest (SHA-256 cryptographic digest across session and SOAP payloads for content verification)
+    // Compute content integrity digest (SHA-256 cryptographic digest across session and SOAP payloads)
     const contentToDigest = `${JSON.stringify(session.data)}::${soapDigest}`;
     const digestHex = await computeSha256Digest(contentToDigest);
-
-    const meta = await database.vaultMeta.get('auth');
-    const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
 
     const finalizedData: SessionClinicalData = {
       ...session.data,
       status: 'finalized',
       finalizedAt: now,
-      finalizedBy: therapistName.trim(),
-      attestationByTherapistName: therapistName.trim(),
+      finalizedBy: signer,
+      attestationByTherapistName: signer,
       attestationTimestamp: now,
       contentIntegrityDigestSha256: digestHex,
     };
@@ -859,7 +975,8 @@ export class SessionService {
       [session.patientId, session.episodeId],
       finalizedData,
       CURRENT_RECORD_CRYPTO_VERSION,
-      activeDekVersion
+      activeDekVersion,
+      expectedGen
     );
 
     const entity: EncryptedSessionEntity = {
@@ -874,7 +991,26 @@ export class SessionService {
       ciphertext,
     };
 
-    await database.sessions.put(entity);
+    // ATOMIC SINGLE-TRANSACTION COMMIT:
+    // Both soapNote (isFinalized = true + seal + signer) and session (status = 'finalized')
+    // are committed together in ONE Dexie readwrite transaction.
+    await database.transaction(
+      'rw',
+      [database.sessions, database.soapNotes, database.vaultMeta],
+      async () => {
+        const currentMeta = await database.vaultMeta.get('auth');
+        const currentGen = currentMeta?.vaultGeneration ?? 1;
+        if (currentGen !== expectedGen) {
+          throw new VaultGenerationChangedError(
+            `تم رفض اعتماد الجلسة: تغير جيل الخزينة (${expectedGen} != ${currentGen}) أثناء العملية.`
+          );
+        }
+        if (finalizedSoapEntity) {
+          await database.soapNotes.put(finalizedSoapEntity);
+        }
+        await database.sessions.put(entity);
+      }
+    );
 
     return {
       id: sessionId,
@@ -888,6 +1024,124 @@ export class SessionService {
       createdAt: session.createdAt,
       updatedAt: now,
       data: finalizedData,
+    };
+  }
+
+  /**
+   * Idempotent repair routine (runs after unlock):
+   * Finds any sessions with `status === 'finalized'` whose associated `soapNote.data.isFinalized` is false
+   * (caused by the pre-Phase-1A TreatmentSessionView bug), finalizes the SOAP note using the session's
+   * recorded signer/timestamp, and marks `repairedDuringMigration: true` + `repairedAt` for honesty.
+   * All crypto is computed BEFORE opening the Dexie transaction.
+   */
+  static async repairHalfFinalizedSessions(
+    dek: CryptoKey,
+    database: PhysioRecordDatabase = defaultDb
+  ): Promise<{ repairedCount: number; repairedSessionIds: string[] }> {
+    const expectedGen = getDekGeneration(dek);
+    if (expectedGen === undefined) {
+      throw new UnboundVaultKeyError(
+        'تم رفض فحص وإصلاح الجلسات: مفتاح التشفير التشغيلي (DEK) غير مرتبط بأي جيل خزينة معتمد.'
+      );
+    }
+
+    const meta = await database.vaultMeta.get('auth');
+    const activeDekVersion = meta?.dekVersion || CURRENT_DEK_VERSION;
+    const allSessionEntities = await database.sessions.toArray();
+
+    const stagedSoapRepairs: EncryptedSoapEntity[] = [];
+    const repairedSessionIds: string[] = [];
+    const repairedAt = new Date().toISOString();
+
+    for (const sEntity of allSessionEntities) {
+      let sData: SessionClinicalData;
+      try {
+        sData = await decryptRecordPayload<SessionClinicalData>(
+          dek,
+          'sessions',
+          sEntity.id,
+          [sEntity.patientId, sEntity.episodeId],
+          sEntity.iv,
+          sEntity.ciphertext,
+          sEntity.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+          sEntity.dekVersion || CURRENT_DEK_VERSION
+        );
+      } catch {
+        continue;
+      }
+
+      if (sData.status !== 'finalized') continue;
+
+      const soap = await SoapService.getSoapNoteBySession(sEntity.id, dek, database);
+      if (!soap || soap.data.isFinalized) continue;
+
+      const recordedSigner =
+        sData.finalizedBy ||
+        sData.attestationByTherapistName ||
+        sData.therapistName ||
+        'System Migration Repair';
+      const recordedFinalizedAt =
+        sData.finalizedAt || sData.attestationTimestamp || sEntity.updatedAt || repairedAt;
+
+      const repairedBase: SoapNoteData = {
+        ...soap.data,
+        soapSchemaVersion: soap.data.soapSchemaVersion ?? CURRENT_SOAP_SCHEMA_VERSION,
+        isFinalized: true,
+        finalizedAt: recordedFinalizedAt,
+        finalizedBy: recordedSigner,
+        repairedDuringMigration: true,
+        repairedAt,
+      };
+      const seal = await computeSha256Digest(JSON.stringify(repairedBase));
+      const repairedSoapData: SoapNoteData = {
+        ...repairedBase,
+        contentDigestSha256: seal,
+      };
+
+      const { iv: newIv, ciphertext: newCiphertext } =
+        await encryptRecordWithMandatoryReservation(
+          database,
+          dek,
+          'soapNotes',
+          soap.id,
+          [soap.patientId, soap.episodeId, soap.sessionId],
+          repairedSoapData,
+          CURRENT_RECORD_CRYPTO_VERSION,
+          activeDekVersion,
+          expectedGen
+        );
+
+      stagedSoapRepairs.push({
+        id: soap.id,
+        sessionId: soap.sessionId,
+        episodeId: soap.episodeId,
+        patientId: soap.patientId,
+        createdAt: soap.createdAt,
+        updatedAt: repairedAt,
+        recordCryptoVersion: CURRENT_RECORD_CRYPTO_VERSION,
+        dekVersion: activeDekVersion,
+        iv: newIv,
+        ciphertext: newCiphertext,
+      });
+      repairedSessionIds.push(sEntity.id);
+    }
+
+    if (stagedSoapRepairs.length > 0) {
+      await database.transaction('rw', [database.soapNotes, database.vaultMeta], async () => {
+        const currentMeta = await database.vaultMeta.get('auth');
+        const currentGen = currentMeta?.vaultGeneration ?? 1;
+        if (currentGen !== expectedGen) {
+          throw new VaultGenerationChangedError(
+            `تم رفض حفظ إصلاح الملاحظات السريرية: تغير جيل الخزينة (${expectedGen} != ${currentGen}).`
+          );
+        }
+        await database.soapNotes.bulkPut(stagedSoapRepairs);
+      });
+    }
+
+    return {
+      repairedCount: stagedSoapRepairs.length,
+      repairedSessionIds,
     };
   }
 

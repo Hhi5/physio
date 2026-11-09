@@ -43,7 +43,13 @@ import { useLanguage } from '../context/LanguageContext';
 import { SessionModal } from './SessionModal';
 import { SoapModal } from './SoapModal';
 import { AddendumModal } from './AddendumModal';
-import { compareLongitudinalRomEntries, BODY_LATERALITIES } from '../data/clinicalToolkit/romMmtCatalog';
+import { SessionService } from '../services/sessionService';
+import {
+  compareLongitudinalRomEntries,
+  findMatchingBaselineRomEntry,
+  findMatchingBaselineMmtEntry,
+  BODY_LATERALITIES,
+} from '../data/clinicalToolkit/romMmtCatalog';
 
 interface EpisodeSessionsViewProps {
   episode: EpisodeRecord;
@@ -132,12 +138,7 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
     }> = [];
 
     for (const latestEntry of latestEntries) {
-      const baseMatch = baselineEntries.find(
-        (b) =>
-          b.jointId === latestEntry.jointId &&
-          b.movementId === latestEntry.movementId &&
-          b.laterality === latestEntry.laterality
-      );
+      const baseMatch = findMatchingBaselineRomEntry(baselineEntries, latestEntry);
 
       if (baseMatch) {
         const comp = compareLongitudinalRomEntries(baseMatch, latestEntry);
@@ -190,11 +191,7 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
     }> = [];
 
     for (const latestEntry of latestEntries) {
-      const baseMatch = baselineEntries.find(
-        (b) =>
-          b.muscleGroupId === latestEntry.muscleGroupId &&
-          b.laterality === latestEntry.laterality
-      );
+      const baseMatch = findMatchingBaselineMmtEntry(baselineEntries, latestEntry);
 
       if (baseMatch && baseMatch.isTested && latestEntry.isTested) {
         comparisons.push({
@@ -238,9 +235,9 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
 
       setSoapCache(soaps);
       setAddendaCountCache(addendaCounts);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load sessions for episode:', err);
-      setError(err?.message || 'فشل تحميل جلسات حلقة الرعاية.');
+      setError(err instanceof Error ? err.message : 'فشل تحميل جلسات حلقة الرعاية.');
     } finally {
       setLoading(false);
     }
@@ -273,8 +270,8 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
       setSessionToCancel(null);
       setCancellationReasonInput('');
       await fetchSessionsAndNotes();
-    } catch (err: any) {
-      alert(err?.message || 'فشل إلغاء الجلسة.');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'فشل إلغاء الجلسة.');
     }
   };
 
@@ -745,8 +742,8 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
                           try {
                             await deleteSession(sess.id);
                             await fetchSessionsAndNotes();
-                          } catch (err: any) {
-                            alert(err?.message || 'فشل حذف المسودة.');
+                          } catch (err: unknown) {
+                            alert(err instanceof Error ? err.message : 'فشل حذف المسودة.');
                           }
                         }
                       }}
@@ -773,6 +770,7 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
           episode={episode}
           sessionToEdit={sessionToEdit}
           existingSessionCount={sessions.length}
+          nextSessionNumber={SessionService.computeNextSessionNumber(sessions)}
         />
       )}
 
@@ -829,7 +827,11 @@ export const EpisodeSessionsView: React.FC<EpisodeSessionsViewProps> = ({
                 <label className="block text-xs font-bold text-slate-700 mb-1">جهة الإلغاء:</label>
                 <select
                   value={cancellationType}
-                  onChange={(e) => setCancellationType(e.target.value as any)}
+                  onChange={(e) =>
+                    setCancellationType(
+                      e.target.value as 'cancelled_patient' | 'cancelled_clinic' | 'no_show'
+                    )
+                  }
                   className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl"
                 >
                   <option value="cancelled_patient">ألغيت من قبل المريض (Cancelled by Patient)</option>

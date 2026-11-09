@@ -434,7 +434,7 @@ export const NeuroScreeningPanel: React.FC<NeuroScreeningPanelProps> = ({
                             handleUpdateMyotomeGrade(
                               item.rootLevel,
                               'right',
-                              (e.target.value as any) || null
+                              (e.target.value as MmtGradeValue | 'NT') || null
                             )
                           }
                           className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono focus:ring-1 focus:ring-primary-500 focus:outline-hidden bg-white"
@@ -460,7 +460,7 @@ export const NeuroScreeningPanel: React.FC<NeuroScreeningPanelProps> = ({
                             handleUpdateMyotomeGrade(
                               item.rootLevel,
                               'left',
-                              (e.target.value as any) || null
+                              (e.target.value as MmtGradeValue | 'NT') || null
                             )
                           }
                           className="w-full px-2 py-1 text-xs border border-slate-300 rounded font-mono focus:ring-1 focus:ring-primary-500 focus:outline-hidden bg-white"

@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { useLanguage } from '../../context/LanguageContext';
+import { computePatientAge } from '../../utils/date';
 import type { PatientRecord, EpisodeRecord, SessionRecord } from '../../types/clinical';
 import {
   Activity,
@@ -92,6 +93,14 @@ export const PatientSummarySidebar: React.FC<PatientSummarySidebarProps> = ({
             <span>
               {d.gender === 'male' ? (isAr ? 'ذكر' : 'Male') : isAr ? 'أنثى' : 'Female'}
             </span>
+          )}
+          {computePatientAge(d.dateOfBirth, d.age) !== undefined && (
+            <>
+              <span>·</span>
+              <span>
+                {computePatientAge(d.dateOfBirth, d.age)} {isAr ? 'سنة' : 'yrs'}
+              </span>
+            </>
           )}
           {d.dateOfBirth && (
             <>

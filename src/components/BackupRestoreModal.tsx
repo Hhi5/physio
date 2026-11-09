@@ -18,6 +18,7 @@ import {
   createDurablePreRestoreRecoveryBackup,
   saveExternalRecoveryBackupFile,
 } from '../crypto/recovery';
+import { localDate, formatClinicalDate } from '../utils/date';
 import {
   X,
   Download,
@@ -39,7 +40,7 @@ interface BackupRestoreModalProps {
 export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, onClose }) => {
   const { vaultKek, unlock } = useVault();
   const { refreshPatients } = usePatients();
-  const { bi, isRtl } = useLanguage();
+  const { bi, isRtl, language } = useLanguage();
 
   const [activeTab, setActiveTab] = useState<'export' | 'restore'>('export');
 
@@ -104,7 +105,7 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
       const blob = new Blob([backupPackageStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      const dateStr = new Date().toISOString().split('T')[0];
+      const dateStr = localDate();
       a.href = url;
       a.download = `physiorecord_backup_${dateStr}.ptbackup`;
       document.body.appendChild(a);
@@ -115,8 +116,8 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
       setExportSuccess(true);
       setExportPassword('');
       setConfirmExportPassword('');
-    } catch (err: any) {
-      setExportError(err?.message || 'فشل تصدير النسخة الاحتياطية.');
+    } catch (err: unknown) {
+      setExportError(err instanceof Error ? err.message : 'فشل تصدير النسخة الاحتياطية.');
     } finally {
       setExportLoading(false);
     }
@@ -160,8 +161,8 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
     try {
       const summary = await inspectBackupPreview(restoreFileContent, restorePassword, db);
       setPreviewSummary(summary);
-    } catch (err: any) {
-      setRestoreError(err?.message || 'فشل التحقق من النسخة الاحتياطية. تأكد من كلمة المرور وسلامة الملف.');
+    } catch (err: unknown) {
+      setRestoreError(err instanceof Error ? err.message : 'فشل التحقق من النسخة الاحتياطية. تأكد من كلمة المرور وسلامة الملف.');
     } finally {
       setRestoreLoading(false);
     }
@@ -226,18 +227,19 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
             saveMethodDesc = extResult.confirmedSaved
               ? 'تم الحفظ مباشرة على القرص عبر File System Access API'
               : 'تم تصدير وتنزيل الملف عبر المتصفح (Download Fallback)';
-          } catch (fileErr: any) {
-            if (fileErr?.message?.includes('إلغاء')) {
+          } catch (fileErr: unknown) {
+            if (fileErr instanceof Error && fileErr.message.includes('إلغاء')) {
               setRestoreLoading(false);
               setRestoreError('تم إلغاء عملية الاستعادة: ألغى المستخدم حفظ ملف نسخة التعافي الخارجي.');
               return;
             }
             console.warn('External file save fallback:', fileErr);
           }
-        } catch (backupErr: any) {
+        } catch (backupErr: unknown) {
           // STRICT RULE: Halt restore immediately if emergency recovery backup fails!
+          const msg = backupErr instanceof Error ? backupErr.message : String(backupErr);
           setRestoreLoading(false);
-          setRestoreError(`فشلت حماية البيانات السابقة: تعذر إنشاء نسخة التعافي الطارئة (${backupErr?.message || backupErr}). تم إيقاف عملية الاستعادة فوراً لحماية بياناتك من الضياع.`);
+          setRestoreError(`فشلت حماية البيانات السابقة: تعذر إنشاء نسخة التعافي الطارئة (${msg}). تم إيقاف عملية الاستعادة فوراً لحماية بياناتك من الضياع.`);
           return;
         }
       }
@@ -258,8 +260,8 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
       setEmergencyRecoveryPackage(emergencyPkg);
       setExternalSaveMethod(saveMethodDesc);
       setRestoreSuccess(true);
-    } catch (err: any) {
-      setRestoreError(err?.message || 'فشل استعادة النسخة الاحتياطية.');
+    } catch (err: unknown) {
+      setRestoreError(err instanceof Error ? err.message : 'فشل استعادة النسخة الاحتياطية.');
     } finally {
       setRestoreLoading(false);
     }
@@ -571,7 +573,7 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
                         <p className="flex justify-between">
                           <span>تاريخ إنشاء النسخة:</span>
                           <strong className="text-slate-800 font-mono">
-                            {new Date(previewSummary.exportDateUtc).toLocaleString('ar-EG')}
+                            {formatClinicalDate(previewSummary.exportDateUtc, language, { includeTime: true })}
                           </strong>
                         </p>
                         <p className="flex justify-between">
@@ -604,7 +606,7 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({ isOpen, 
                           <span>آخر تعديل محلي مسجل:</span>
                           <strong className="text-slate-800 font-mono">
                             {previewSummary.currentLatestModificationDate
-                              ? new Date(previewSummary.currentLatestModificationDate).toLocaleString('ar-EG')
+                              ? formatClinicalDate(previewSummary.currentLatestModificationDate, language, { includeTime: true })
                               : 'لا توجد سجلات بعد'}
                           </strong>
                         </p>

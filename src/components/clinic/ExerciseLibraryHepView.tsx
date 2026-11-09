@@ -6,6 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
 import { PT_EXERCISE_CATALOG } from '../../services/clinicOperationsService';
+import { localDate } from '../../utils/date';
 import type {
   ExerciseAnatomicalRegion,
   ExerciseTherapeuticGoal,
@@ -185,7 +186,7 @@ export const ExerciseLibraryHepView: React.FC<ExerciseLibraryHepViewProps> = ({
               </p>
             </div>
             <div className="text-xs font-mono text-slate-500">
-              {new Date().toISOString().split('T')[0]}
+              {localDate()}
             </div>
           </div>
 
@@ -265,7 +266,7 @@ export const ExerciseLibraryHepView: React.FC<ExerciseLibraryHepViewProps> = ({
 
               <select
                 value={selectedRegion}
-                onChange={(e) => setSelectedRegion(e.target.value as any)}
+                onChange={(e) => setSelectedRegion(e.target.value as ExerciseAnatomicalRegion | 'all')}
                 className="px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 font-semibold"
               >
                 {Object.entries(regionLabels).map(([k, v]) => (
@@ -277,7 +278,7 @@ export const ExerciseLibraryHepView: React.FC<ExerciseLibraryHepViewProps> = ({
 
               <select
                 value={selectedGoal}
-                onChange={(e) => setSelectedGoal(e.target.value as any)}
+                onChange={(e) => setSelectedGoal(e.target.value as ExerciseTherapeuticGoal | 'all')}
                 className="px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 font-semibold"
               >
                 {Object.entries(goalLabels).map(([k, v]) => (

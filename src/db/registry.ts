@@ -35,12 +35,62 @@ export const CLINICAL_STORES_REGISTRY: Record<string, ClinicalStoreDefinition> =
   soapNotes: {
     name: 'soapNotes',
     parentKeys: ['patientId', 'episodeId', 'sessionId'],
-    descriptionAr: 'التوثيق السريري والملاحظات اليومية SOAP',
+    descriptionAr: 'التوثيق السريري والملاحظات اليومية وجدول التمارين SOAP',
   },
   clinicalAddenda: {
     name: 'clinicalAddenda',
     parentKeys: ['patientId', 'sessionId'],
     descriptionAr: 'الملاحق والتصحيحات السريرية المعتمدة',
+  },
+  appointments: {
+    name: 'appointments',
+    parentKeys: [],
+    descriptionAr: 'جدول المواعيد والحجوزات السريرية',
+  },
+  waitingList: {
+    name: 'waitingList',
+    parentKeys: [],
+    descriptionAr: 'قائمة الانتظار السريرية',
+  },
+  invoices: {
+    name: 'invoices',
+    parentKeys: [],
+    descriptionAr: 'الفواتير والباقات العلاجية (IQD)',
+  },
+  payments: {
+    name: 'payments',
+    parentKeys: ['invoiceId'],
+    descriptionAr: 'سندات القبض والدفعات المالية (IQD)',
+  },
+  expenses: {
+    name: 'expenses',
+    parentKeys: [],
+    descriptionAr: 'المصاريف التشغيلية للعيادة (IQD)',
+  },
+  auditLogs: {
+    name: 'auditLogs',
+    parentKeys: [],
+    descriptionAr: 'سجل النشاط والعمليات المشفر',
+  },
+  staffState: {
+    name: 'staffState',
+    parentKeys: [],
+    descriptionAr: 'ملصقات وهوية المعالج النشط',
+  },
+  episodeClinical: {
+    name: 'episodeClinical',
+    parentKeys: ['episodeId'],
+    descriptionAr: 'تقييمات حلقة الرعاية والبرنامج المنزلي (HEP)',
+  },
+  customWidgets: {
+    name: 'customWidgets',
+    parentKeys: [],
+    descriptionAr: 'قوالب الوحدات السريرية المخصصة',
+  },
+  migrationReports: {
+    name: 'migrationReports',
+    parentKeys: [],
+    descriptionAr: 'تقارير تدقيق وترحيل البيانات المشفرة',
   },
 };
 
@@ -48,7 +98,7 @@ export const CLINICAL_STORES_REGISTRY: Record<string, ClinicalStoreDefinition> =
  * Stores that are device-specific or technical sequence state and MUST NOT be exported in portable backups.
  * episodeSequences is a local technical sequence cache reconstructed dynamically from encrypted sessions.
  */
-export const EXCLUDED_DEVICE_STORES = ['vaultMeta', 'episodeSequences'];
+export const EXCLUDED_DEVICE_STORES = ['vaultMeta', 'episodeSequences', 'migrationState'];
 
 export class ReferentialIntegrityError extends Error {
   constructor(message: string) {
@@ -57,13 +107,22 @@ export class ReferentialIntegrityError extends Error {
   }
 }
 
+export interface SnapshotEntityRecord {
+  id?: string;
+  patientId?: string;
+  episodeId?: string;
+  sessionId?: string;
+  targetId?: string;
+  [key: string]: unknown;
+}
+
 /**
  * Extract and strictly validate parent IDs for a record based on CLINICAL_STORES_REGISTRY.
  * Rejects records with missing or non-string parent keys.
  */
 export const extractAndValidateParentIds = (
   tableName: string,
-  record: Record<string, any>
+  record: SnapshotEntityRecord
 ): string[] => {
   const storeDef = CLINICAL_STORES_REGISTRY[tableName];
   if (!storeDef) {
@@ -93,7 +152,7 @@ export const extractAndValidateParentIds = (
  * before restoration proceeds.
  */
 export const validateSnapshotReferentialIntegrity = (
-  snapshot: Record<string, any[]>
+  snapshot: Record<string, SnapshotEntityRecord[]>
 ): void => {
   const patientIds = new Set<string>();
   const episodeIds = new Set<string>();

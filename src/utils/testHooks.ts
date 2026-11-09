@@ -25,16 +25,20 @@ export const isTestEnvironment = (): boolean => {
   );
 };
 
+interface WindowWithTestHooks extends Window {
+  __physioRecordTestHooks?: Record<string, unknown>;
+}
+
 /**
  * Safely register test hooks onto window only in test environments.
  * No-op in production.
  */
-export const registerTestHooks = (hooks: Record<string, any>): void => {
+export const registerTestHooks = (hooks: Record<string, unknown>): void => {
   if (import.meta.env.MODE === 'production' || !isTestEnvironment()) return;
 
-  const key = '__physioRecordTestHooks';
-  (window as any)[key] = {
-    ...((window as any)[key] || {}),
+  const win = window as WindowWithTestHooks;
+  win.__physioRecordTestHooks = {
+    ...(win.__physioRecordTestHooks || {}),
     ...hooks,
   };
 };

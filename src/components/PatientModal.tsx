@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { usePatients } from '../context/PatientContext';
 import { useLanguage } from '../context/LanguageContext';
 import type { PatientClinicalData, PatientRecord, Gender, DominantHand } from '../types/clinical';
+import { computePatientAge } from '../utils/date';
 import { 
   X, 
   Save, 
@@ -59,8 +60,12 @@ export const PatientModal: React.FC<PatientModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const patientToEditId = patientToEdit?.id ?? null;
+
   // Initialize form when opening or editing
   useEffect(() => {
+    if (!isOpen) return;
+
     if (patientToEdit) {
       setFormData({ ...patientToEdit.data });
     } else {
@@ -87,25 +92,16 @@ export const PatientModal: React.FC<PatientModalProps> = ({
     }
     setActiveTab('general');
     setError(null);
-  }, [patientToEdit, isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, patientToEditId]);
 
   // Calculate age automatically when DOB changes
   const handleDobChange = (dob: string) => {
-    let calculatedAge: number | undefined = undefined;
-    if (dob) {
-      const birth = new Date(dob);
-      const today = new Date();
-      let age = today.getFullYear() - birth.getFullYear();
-      const m = today.getMonth() - birth.getMonth();
-      if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
-        age--;
-      }
-      calculatedAge = age >= 0 ? age : undefined;
-    }
+    const calculatedAge = computePatientAge(dob, undefined);
     setFormData(prev => ({
       ...prev,
       dateOfBirth: dob,
-      age: calculatedAge !== undefined ? calculatedAge : prev.age,
+      age: dob ? calculatedAge : prev.age,
     }));
   };
 
@@ -124,15 +120,17 @@ export const PatientModal: React.FC<PatientModalProps> = ({
       // Stamp the profile summary edit timestamp before saving.
       // This timestamp records when this demographic/medical background summary was last updated.
       // It is NOT a clinical measurement record — session-level ROM/MMT measurements are Phase 2.
-      const stampedFormData = {
+      const computedAgeFromDob = computePatientAge(formData.dateOfBirth, formData.age);
+      const stampedFormData: PatientClinicalData = {
         ...formData,
+        age: formData.dateOfBirth ? computedAgeFromDob : formData.age,
         profileSummaryUpdatedAt: new Date().toISOString(),
       };
       const saved = await savePatient(stampedFormData, patientToEdit?.id);
       if (onSavedSuccess) onSavedSuccess(saved);
       onClose();
-    } catch (err: any) {
-      setError(err?.message || 'فشل حفظ بيانات المريض.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'فشل حفظ بيانات المريض.');
     } finally {
       setSaving(false);
     }

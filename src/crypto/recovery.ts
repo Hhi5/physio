@@ -14,8 +14,10 @@ import {
   exportBackupPackage,
   restoreBackupPackage,
   buildCanonicalBackupHeaderAAD,
+  type ExportedBackupPackage,
 } from './backup';
 import {
+  subtle,
   deriveBackupKeys,
   unwrapDEKFromBackup,
   decryptBackupPayload,
@@ -111,9 +113,9 @@ export const createDurablePreRestoreRecoveryBackup = async (
   );
 
   // 2. Mathematically prove 100% full decryptability and integrity of the emergency recovery package
-  let pkg: any;
+  let pkg: ExportedBackupPackage;
   try {
-    pkg = JSON.parse(backupPackageStr);
+    pkg = JSON.parse(backupPackageStr) as ExportedBackupPackage;
   } catch {
     throw new Error('فشلت معالجة حزمة نسخة التعافي الطارئة: JSON معطوب.');
   }
@@ -151,17 +153,26 @@ export const createDurablePreRestoreRecoveryBackup = async (
     payloadCiphertext
   );
 
-  let snapshot: any;
+  interface SerializedRecoveryRecord {
+    id: string;
+    iv: number[];
+    ciphertext: number[];
+    recordCryptoVersion?: number;
+    dekVersion?: number;
+    [key: string]: unknown;
+  }
+
+  let snapshot: Record<string, SerializedRecoveryRecord[]>;
   try {
-    snapshot = JSON.parse(decryptedPayloadJson);
+    snapshot = JSON.parse(decryptedPayloadJson) as Record<string, SerializedRecoveryRecord[]>;
   } catch {
     throw new Error('فشل قراءة حمولة نسخة التعافي الطارئة بعد فك التشفير.');
   }
 
   // C. Prove that the recovered DEK can cleanly decrypt EVERY record across ALL clinical stores
-  const testDek = await crypto.subtle.importKey(
+  const testDek = await subtle.importKey(
     'raw',
-    recoveredRawDek as BufferSource,
+    recoveredRawDek,
     { name: 'AES-GCM', length: 256 },
     false,
     ['decrypt']
@@ -174,7 +185,9 @@ export const createDurablePreRestoreRecoveryBackup = async (
     const records = snapshot[storeDef.name];
     if (Array.isArray(records)) {
       for (const r of records) {
-        const parentIds = storeDef.parentKeys.map(k => r[k]).filter(Boolean);
+        const parentIds = storeDef.parentKeys
+          .map((k) => r[k])
+          .filter((v): v is string => typeof v === 'string' && Boolean(v));
         const sourceDekVersion = r.dekVersion || header.dekVersion || CURRENT_DEK_VERSION;
         await decryptRecordPayload(
           testDek,
@@ -240,9 +253,22 @@ export const saveExternalRecoveryBackupFile = async (
   const fileName = `physiorecord_pre_restore_emergency_${suggestedDateStr}.ptbackup`;
 
   // 1. Attempt File System Access API (Chromium Desktop native save dialog)
-  if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+  interface SaveFilePickerWindow extends Window {
+    showSaveFilePicker?: (options: {
+      suggestedName: string;
+      types: Array<{ description: string; accept: Record<string, string[]> }>;
+    }) => Promise<{
+      createWritable: () => Promise<{
+        write: (data: string) => Promise<void>;
+        close: () => Promise<void>;
+      }>;
+    }>;
+  }
+
+  const pickerWin = typeof window !== 'undefined' ? (window as SaveFilePickerWindow) : undefined;
+  if (pickerWin && typeof pickerWin.showSaveFilePicker === 'function') {
     try {
-      const handle = await (window as any).showSaveFilePicker({
+      const handle = await pickerWin.showSaveFilePicker({
         suggestedName: fileName,
         types: [
           {
@@ -263,8 +289,8 @@ export const saveExternalRecoveryBackupFile = async (
         confirmedSaved: true, // Directly confirmed write to physical filesystem
         fileName,
       };
-    } catch (fsErr: any) {
-      if (fsErr.name === 'AbortError') {
+    } catch (fsErr: unknown) {
+      if (fsErr instanceof Error && fsErr.name === 'AbortError') {
         throw new Error('تم إلغاء حفظ ملف التعافي الخارجي من قبل المستخدم.');
       }
       // If other FS error, proceed to fallback

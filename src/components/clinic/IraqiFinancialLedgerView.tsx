@@ -11,6 +11,7 @@ import {
   formatIQD,
   ROLE_PERMISSIONS,
 } from '../../services/clinicOperationsService';
+import { localDate } from '../../utils/date';
 import type {
   FinancialInvoiceIQD,
   IraqiPaymentMethod,
@@ -138,7 +139,7 @@ export const IraqiFinancialLedgerView: React.FC = () => {
     e.preventDefault();
     if (!expTitle.trim() || expAmountIQD <= 0) return;
     const updated = ClinicOperationsService.addExpenseIQD({
-      date: new Date().toISOString().split('T')[0],
+      date: localDate(),
       category: expCategory,
       titleAr: expTitle.trim(),
       titleEn: expTitle.trim(),
@@ -277,15 +278,17 @@ export const IraqiFinancialLedgerView: React.FC = () => {
               {isAr ? 'إصدار فاتورة علاج طبيعي أو باقة جلسات (IQD)' : 'Create New IQD Invoice or Package'}
             </h3>
             <div className="flex items-center gap-1.5">
-              {[
-                { id: 'single_session', ar: 'جلسة مفردة (25,000 د.ع)', en: 'Single Session (25k)' },
-                { id: 'rehab_package', ar: 'كورس 10 جلسات (225,000 د.ع)', en: '10-Session Package' },
-                { id: 'evaluation', ar: 'فحص وتقييم أولي (35,000 د.ع)', en: 'Initial Eval (35k)' },
-              ].map((preset) => (
+              {(
+                [
+                  { id: 'single_session', ar: 'جلسة مفردة (25,000 د.ع)', en: 'Single Session (25k)' },
+                  { id: 'rehab_package', ar: 'كورس 10 جلسات (225,000 د.ع)', en: '10-Session Package' },
+                  { id: 'evaluation', ar: 'فحص وتقييم أولي (35,000 د.ع)', en: 'Initial Eval (35k)' },
+                ] as const
+              ).map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
-                  onClick={() => handleInvoicePresetChange(preset.id as any)}
+                  onClick={() => handleInvoicePresetChange(preset.id)}
                   className={`px-3 py-1 rounded-lg text-xs font-bold cursor-pointer ${
                     invType === preset.id
                       ? 'bg-teal-600 text-white'
@@ -598,15 +601,17 @@ export const IraqiFinancialLedgerView: React.FC = () => {
 
       {/* Navigation Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800">
-        {[
-          { id: 'invoices', ar: 'سجل الفواتير وباقات الجلسات', en: 'Invoices & Rehab Packages' },
-          { id: 'debts', ar: 'دفتر ديون وذمم المرضى', en: 'Patient Debt Ledger' },
-          { id: 'expenses', ar: 'مصاريف العيادة التشغيلية', en: 'Clinic Expenses' },
-        ].map((tab) => (
+        {(
+          [
+            { id: 'invoices', ar: 'سجل الفواتير وباقات الجلسات', en: 'Invoices & Rehab Packages' },
+            { id: 'debts', ar: 'دفتر ديون وذمم المرضى', en: 'Patient Debt Ledger' },
+            { id: 'expenses', ar: 'مصاريف العيادة التشغيلية', en: 'Clinic Expenses' },
+          ] as const
+        ).map((tab) => (
           <button
             key={tab.id}
             type="button"
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id)}
             className={`px-4 py-3 text-xs font-bold border-b-2 transition-all cursor-pointer whitespace-nowrap ${
               activeTab === tab.id
                 ? 'border-teal-600 text-teal-600 dark:text-teal-400'

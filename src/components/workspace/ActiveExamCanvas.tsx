@@ -44,8 +44,8 @@ interface ActiveExamCanvasProps {
   onGaitPostureChange: (gait: GaitPostureData) => void;
   functionalScales: FunctionalScaleEntry | undefined;
   onFunctionalScalesChange: (scale: FunctionalScaleEntry) => void;
-  customWidgetsData: Record<string, any>;
-  onCustomWidgetsDataChange: (data: Record<string, any>) => void;
+  customWidgetsData: Record<string, Record<string, unknown>>;
+  onCustomWidgetsDataChange: (data: Record<string, Record<string, unknown>>) => void;
   readOnly?: boolean;
 }
 

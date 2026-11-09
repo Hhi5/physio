@@ -25,6 +25,7 @@ import {
   type EpisodeRecord 
 } from '../types/clinical';
 import { useLanguage } from '../context/LanguageContext';
+import { localDate } from '../utils/date';
 
 interface SessionModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ interface SessionModalProps {
   episode: EpisodeRecord;
   sessionToEdit?: SessionRecord | null;
   existingSessionCount: number;
+  nextSessionNumber?: number;
 }
 
 export const SessionModal: React.FC<SessionModalProps> = ({
@@ -42,6 +44,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   episode,
   sessionToEdit,
   existingSessionCount,
+  nextSessionNumber,
 }) => {
   const { isRtl, bi } = useLanguage();
   const [submitting, setSubmitting] = useState(false);
@@ -50,7 +53,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   // Form State
   const [customSessionNumber, setCustomSessionNumber] = useState<string>('');
   const [sessionType, setSessionType] = useState<SessionType>('follow_up');
-  const [sessionDate, setSessionDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [sessionDate, setSessionDate] = useState<string>(localDate());
   const [sessionTime, setSessionTime] = useState<string>('10:00');
   const [sessionDurationMinutes, setSessionDurationMinutes] = useState<number>(45);
   const [attendanceStatus, setAttendanceStatus] = useState<AttendanceStatus>('attended');
@@ -58,7 +61,11 @@ export const SessionModal: React.FC<SessionModalProps> = ({
   const [therapistName, setTherapistName] = useState<string>('د. المعالج الطبيعي');
   const [administrativeNotes, setAdministrativeNotes] = useState<string>('');
 
+  const sessionToEditId = sessionToEdit?.id ?? null;
+
   useEffect(() => {
+    if (!isOpen) return;
+
     if (sessionToEdit) {
       const d = sessionToEdit.data;
       setCustomSessionNumber(sessionToEdit.sessionNumber ? String(sessionToEdit.sessionNumber) : '');
@@ -75,7 +82,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       const isFirst = existingSessionCount === 0;
       setCustomSessionNumber('');
       setSessionType(isFirst ? 'initial_evaluation' : 'follow_up');
-      setSessionDate(new Date().toISOString().split('T')[0]);
+      setSessionDate(localDate());
       setSessionTime('10:00');
       setSessionDurationMinutes(45);
       setAttendanceStatus('attended');
@@ -84,7 +91,8 @@ export const SessionModal: React.FC<SessionModalProps> = ({
       setAdministrativeNotes('');
     }
     setError(null);
-  }, [sessionToEdit, existingSessionCount, isOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, sessionToEditId]);
 
   if (!isOpen) return null;
 
@@ -124,9 +132,9 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
       await onSave(payload);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Session save error:', err);
-      setError(err?.message || 'حدث خطأ أثناء حفظ الجلسة.');
+      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء حفظ الجلسة.');
     } finally {
       setSubmitting(false);
     }
@@ -134,7 +142,7 @@ export const SessionModal: React.FC<SessionModalProps> = ({
 
   const calculatedSessionNumber = sessionToEdit 
     ? sessionToEdit.sessionNumber 
-    : existingSessionCount + 1;
+    : (nextSessionNumber ?? existingSessionCount + 1);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto" dir={isRtl ? 'rtl' : 'ltr'}>

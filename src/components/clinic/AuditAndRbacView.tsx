@@ -9,6 +9,7 @@ import {
   CLINIC_STAFF_ROSTER,
   ROLE_PERMISSIONS,
 } from '../../services/clinicOperationsService';
+import { formatClinicalDate } from '../../utils/date';
 import type { ClinicStaffMember, AuditLogEntry } from '../../types/clinicManagement';
 import { ShieldCheck, UserCheck, Lock, FileSpreadsheet, CheckCircle2, XCircle } from 'lucide-react';
 
@@ -191,7 +192,7 @@ export const AuditAndRbacView: React.FC<AuditAndRbacViewProps> = ({ onRoleChange
                 auditLogs.map((log) => (
                   <tr key={log.id} className="tabular-nums">
                     <td className="py-3 px-4 font-mono text-slate-500">
-                      {new Date(log.timestamp).toLocaleString(isAr ? 'ar-IQ' : 'en-US')}
+                      {formatClinicalDate(log.timestamp, isAr ? 'ar' : 'en', { includeTime: true })}
                     </td>
                     <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
                       {log.actorName} ({log.actorRole})

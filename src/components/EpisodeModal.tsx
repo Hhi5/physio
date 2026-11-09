@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import type { PatientRecord, EpisodeRecord, EpisodeClinicalData, ClinicalSpecialty, OnsetMechanism } from '../types/clinical';
 import { CLINICAL_SPECIALTIES, ONSET_MECHANISMS, COMMON_BODY_REGIONS } from '../data/terminology';
+import { localDate, computePatientAge } from '../utils/date';
 import {
   X,
   Layers,
@@ -43,7 +44,7 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
   const [primarySpecialty, setPrimarySpecialty] = useState<ClinicalSpecialty>('musculoskeletal');
   const [affectedBodyRegion, setAffectedBodyRegion] = useState('');
   const [customBodyRegion, setCustomBodyRegion] = useState('');
-  const [onsetDate, setOnsetDate] = useState(new Date().toISOString().split('T')[0]);
+  const [onsetDate, setOnsetDate] = useState(localDate());
   const [onsetMechanism, setOnsetMechanism] = useState<OnsetMechanism>('insidious');
   const [medicalDiagnosis, setMedicalDiagnosis] = useState('');
   const [clinicalImpression, setClinicalImpression] = useState('');
@@ -65,6 +66,8 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const episodeToEditId = episodeToEdit?.id ?? null;
+
   // Populate form on open
   useEffect(() => {
     if (!isOpen) return;
@@ -75,7 +78,7 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       setTitle(ed.title);
       setPrimarySpecialty(episodeToEdit.primarySpecialty);
       setAffectedBodyRegion(ed.affectedBodyRegion);
-      setOnsetDate(episodeToEdit.startDate || new Date().toISOString().split('T')[0]);
+      setOnsetDate(episodeToEdit.startDate || localDate());
       setOnsetMechanism(ed.onsetMechanism || 'insidious');
       setMedicalDiagnosis(ed.medicalDiagnosis);
       setClinicalImpression(ed.clinicalImpression);
@@ -94,7 +97,7 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       setPrimarySpecialty('musculoskeletal');
       setAffectedBodyRegion(COMMON_BODY_REGIONS[0].en);
       setCustomBodyRegion('');
-      setOnsetDate(new Date().toISOString().split('T')[0]);
+      setOnsetDate(localDate());
       setOnsetMechanism('insidious');
       setMedicalDiagnosis(p.medicalHistory || '');
       setClinicalImpression(p.generalNotes || 'فحص أولي وتقييم حركي للحالة.');
@@ -112,7 +115,8 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       setIsOnsetDateExact(true);
       setAreBaselineGoalsFormalized(true);
     }
-  }, [isOpen, episodeToEdit, p]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, episodeToEditId, patient.id]);
 
   if (!isOpen) return null;
 
@@ -203,13 +207,15 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
       });
 
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to save episode:', err);
-      setError(err?.message || 'حدث خطأ أثناء حفظ حلقة الرعاية.');
+      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء حفظ حلقة الرعاية.');
     } finally {
       setSaving(false);
     }
   };
+
+  const displayAge = computePatientAge(p.dateOfBirth, p.age);
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4" dir={isRtl ? 'rtl' : 'ltr'}>
@@ -226,7 +232,7 @@ export const EpisodeModal: React.FC<EpisodeModalProps> = ({
                 {isEditing ? bi('تعديل حلقة الرعاية السريرية', 'Edit Episode of Care') : bi('بدء حلقة رعاية جديدة', 'Start New Episode of Care')}
               </h2>
               <p className="text-xs text-primary-100 mt-0.5">
-                {bi('المريض:', 'Patient:')} <span className="font-semibold">{p.fullNameAr || p.fullName}</span> ({p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}، {p.age || '—'} {bi('سنة', 'yrs')})
+                {bi('المريض:', 'Patient:')} <span className="font-semibold">{p.fullNameAr || p.fullName}</span> ({p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}، {displayAge ?? '—'} {bi('سنة', 'yrs')})
               </p>
             </div>
           </div>

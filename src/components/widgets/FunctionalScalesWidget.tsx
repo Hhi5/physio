@@ -10,6 +10,7 @@ import type {
   ValidatedScaleId,
   OutcomeScoreHistoryPoint,
 } from '../../types/clinicalWidgets';
+import { localDate } from '../../utils/date';
 import { FileCheck, Plus, TrendingDown, Trash2 } from 'lucide-react';
 
 interface FunctionalScalesWidgetProps {
@@ -326,7 +327,7 @@ export const FunctionalScalesWidget: React.FC<FunctionalScalesWidgetProps> = ({
     const currentScore = value?.scorePercentage ?? 0;
     const newPoint: OutcomeScoreHistoryPoint = {
       id: `hist_${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
+      date: localDate(),
       visitType: visitTypeForLog,
       scaleId: activeScale.id,
       scaleNameAr: activeScale.code,
@@ -408,7 +409,7 @@ export const FunctionalScalesWidget: React.FC<FunctionalScalesWidgetProps> = ({
             <div className="flex items-center gap-1.5">
               <select
                 value={visitTypeForLog}
-                onChange={(e) => setVisitTypeForLog(e.target.value as any)}
+                onChange={(e) => setVisitTypeForLog(e.target.value as OutcomeScoreHistoryPoint['visitType'])}
                 className="px-2.5 py-1.5 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 font-medium"
               >
                 <option value="initial_evaluation">

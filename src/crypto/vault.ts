@@ -49,7 +49,11 @@
  *      on memory-constrained mobile devices.
  */
 
-import { VaultGenerationChangedError, UnboundVaultKeyError } from '../types/clinical';
+import {
+  VaultGenerationChangedError,
+  UnboundVaultKeyError,
+  type VaultMetaEntity,
+} from '../types/clinical';
 import { registerTestHooks } from '../utils/testHooks';
 
 const DEFAULT_PBKDF2_ITERATIONS = 600_000;
@@ -62,10 +66,68 @@ export const CURRENT_DEK_VERSION = 1;
 export const MAX_GCM_INVOCATIONS_PER_DEK = 1_000_000;
 export const CONSERVATIVE_ROTATION_THRESHOLD = MAX_GCM_INVOCATIONS_PER_DEK;
 export const MAX_BACKUP_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
-const subtle = (crypto as any).subtle as any;
 
-// TypeScript 5.7+ / 7.0 compatibility for Web Crypto BufferSource
-type BufferSource = any;
+export type CryptoBuffer = Uint8Array | ArrayBuffer;
+
+export interface SubtleCryptoCompat {
+  importKey(
+    format: 'raw',
+    keyData: CryptoBuffer,
+    algorithm: string | Record<string, unknown>,
+    extractable: boolean,
+    keyUsages: KeyUsage[]
+  ): Promise<CryptoKey>;
+  deriveKey(
+    algorithm: Record<string, unknown>,
+    baseKey: CryptoKey,
+    derivedKeyType: Record<string, unknown>,
+    extractable: boolean,
+    keyUsages: KeyUsage[]
+  ): Promise<CryptoKey>;
+  deriveBits(
+    algorithm: Record<string, unknown>,
+    baseKey: CryptoKey,
+    length: number
+  ): Promise<ArrayBuffer>;
+  encrypt(
+    algorithm: Record<string, unknown>,
+    key: CryptoKey,
+    data: CryptoBuffer
+  ): Promise<ArrayBuffer>;
+  decrypt(
+    algorithm: Record<string, unknown>,
+    key: CryptoKey,
+    data: CryptoBuffer
+  ): Promise<ArrayBuffer>;
+  sign(
+    algorithm: string | Record<string, unknown>,
+    key: CryptoKey,
+    data: CryptoBuffer
+  ): Promise<ArrayBuffer>;
+  digest(
+    algorithm: string,
+    data: CryptoBuffer
+  ): Promise<ArrayBuffer>;
+  exportKey(
+    format: 'raw',
+    key: CryptoKey
+  ): Promise<ArrayBuffer>;
+  generateKey(
+    algorithm: Record<string, unknown>,
+    extractable: boolean,
+    keyUsages: KeyUsage[]
+  ): Promise<CryptoKey>;
+}
+
+export const subtle: SubtleCryptoCompat = crypto.subtle as unknown as SubtleCryptoCompat;
+
+export interface VaultDatabaseHandle {
+  vaultMeta: {
+    get(id: string): Promise<VaultMetaEntity | undefined>;
+    update(id: string, changes: Partial<VaultMetaEntity>): Promise<number>;
+  };
+  transaction<T>(mode: 'rw', table: unknown, scope: () => Promise<T>): Promise<T>;
+}
 
 export class LockedVaultError extends Error {
   constructor(message = 'قاعدة البيانات مقفلة. يرجى إدخال كلمة المرور أولاً.') {
@@ -661,14 +723,15 @@ export const validateRawBackupString = (
  * Rigorously checks all mandatory fields, types, byte lengths, and exact v1.1 parameters.
  */
 export const validateBackupHeaderPreDerivation = (
-  header: any,
+  untrustedHeader: unknown,
   maxPayloadSizeBytes = MAX_BACKUP_SIZE_BYTES
 ): void => {
-  if (!header || typeof header !== 'object' || Array.isArray(header)) {
+  if (!untrustedHeader || typeof untrustedHeader !== 'object' || Array.isArray(untrustedHeader)) {
     throw new BackupHeaderValidationError('بنية ترويسة ملف النسخة غير صالحة.');
   }
+  const header = untrustedHeader as Record<string, unknown>;
   if (header.magic !== 'PHYSIORECORD_BACKUP_V1.1') {
-    throw new BackupHeaderValidationError(`المعرف السحري غير صالح: ${header.magic}`);
+    throw new BackupHeaderValidationError(`المعرف السحري غير صالح: ${String(header.magic)}`);
   }
   if (typeof header.exportDateUtc !== 'string' || !header.exportDateUtc || isNaN(Date.parse(header.exportDateUtc))) {
     throw new BackupHeaderValidationError('تاريخ التصدير exportDateUtc غير صالح أو مفقود.');
@@ -676,43 +739,44 @@ export const validateBackupHeaderPreDerivation = (
   if (typeof header.clinicTimezone !== 'string' || !header.clinicTimezone.trim()) {
     throw new BackupHeaderValidationError('المنطقة الزمنية clinicTimezone غير صالحة أو مفقودة.');
   }
-  if (!Number.isInteger(header.schemaVersion) || header.schemaVersion < 1) {
-    throw new BackupHeaderValidationError(`إصدار المخطط schemaVersion غير صالح: ${header.schemaVersion}`);
+  if (typeof header.schemaVersion !== 'number' || !Number.isInteger(header.schemaVersion) || header.schemaVersion < 1) {
+    throw new BackupHeaderValidationError(`إصدار المخطط schemaVersion غير صالح: ${String(header.schemaVersion)}`);
   }
   if (header.kdfAlgorithm !== 'PBKDF2-HMAC-SHA256') {
-    throw new BackupHeaderValidationError(`خوارزمية KDF غير مدعومة: ${header.kdfAlgorithm}`);
+    throw new BackupHeaderValidationError(`خوارزمية KDF غير مدعومة: ${String(header.kdfAlgorithm)}`);
   }
   // STRICT v1.1 REQUIREMENT: Reject any iteration count other than 600,000
   if (header.kdfIterations !== 600_000) {
     throw new BackupHeaderValidationError(
-      `عدد دورات KDF يجب أن يكون 600000 بالضبط لتنسيق v1.1 (المقدم: ${header.kdfIterations}).`
+      `عدد دورات KDF يجب أن يكون 600000 بالضبط لتنسيق v1.1 (المقدم: ${String(header.kdfIterations)}).`
     );
   }
   if (header.keyExpansion !== 'HKDF-SHA256') {
-    throw new BackupHeaderValidationError(`خوارزمية اشتقاق المفاتيح غير مدعومة: ${header.keyExpansion}`);
+    throw new BackupHeaderValidationError(`خوارزمية اشتقاق المفاتيح غير مدعومة: ${String(header.keyExpansion)}`);
   }
   if (header.hkdfHash !== 'SHA-256') {
-    throw new BackupHeaderValidationError(`تجزئة HKDF غير مدعومة: ${header.hkdfHash}`);
+    throw new BackupHeaderValidationError(`تجزئة HKDF غير مدعومة: ${String(header.hkdfHash)}`);
   }
   if (header.hkdfInfoDekWrap !== 'physiorecord-backup-dek-wrap-v1.1') {
-    throw new BackupHeaderValidationError(`معرف hkdfInfoDekWrap غير مطابق: ${header.hkdfInfoDekWrap}`);
+    throw new BackupHeaderValidationError(`معرف hkdfInfoDekWrap غير مطابق: ${String(header.hkdfInfoDekWrap)}`);
   }
   if (header.hkdfInfoPayloadEnc !== 'physiorecord-backup-payload-enc-v1.1') {
-    throw new BackupHeaderValidationError(`معرف hkdfInfoPayloadEnc غير مطابق: ${header.hkdfInfoPayloadEnc}`);
+    throw new BackupHeaderValidationError(`معرف hkdfInfoPayloadEnc غير مطابق: ${String(header.hkdfInfoPayloadEnc)}`);
   }
   if (header.derivedKeyLengthBits !== 256) {
     throw new BackupHeaderValidationError(`طول المفتاح المشتق derivedKeyLengthBits يجب أن يكون 256.`);
   }
 
   // Strictly validate byte arrays: length and byte-range [0..255]
-  const validateByteArray = (arr: any, expectedLen: number, name: string) => {
-    if (!arr) throw new BackupHeaderValidationError(`حقل ${name} مفقود في الترويسة.`);
+  const validateByteArray = (arr: unknown, expectedLen: number, name: string) => {
+    if (!arr || typeof arr !== 'object') throw new BackupHeaderValidationError(`حقل ${name} مفقود في الترويسة.`);
+    const indexable = arr as ArrayLike<unknown>;
     const len = Array.isArray(arr) || arr instanceof Uint8Array ? arr.length : Object.keys(arr).length;
     if (len !== expectedLen) {
       throw new BackupHeaderValidationError(`طول ${name} غير مطابق (المطلوب ${expectedLen} بايت، الفعلي ${len}).`);
     }
     for (let i = 0; i < expectedLen; i++) {
-      const val = arr[i];
+      const val = indexable[i];
       if (typeof val !== 'number' || val < 0 || val > 255 || !Number.isInteger(val)) {
         throw new BackupHeaderValidationError(`قيمة البايت في ${name}[${i}] غير صالحة.`);
       }
@@ -725,7 +789,7 @@ export const validateBackupHeaderPreDerivation = (
   validateByteArray(header.backupDataIv, 12, 'IV حمولة النسخة (backupDataIv)');
 
   // backupWrappedDek: AES-256-GCM ciphertext + 16-byte tag (should be at least 16 bytes)
-  if (!header.backupWrappedDek) {
+  if (!header.backupWrappedDek || typeof header.backupWrappedDek !== 'object') {
     throw new BackupHeaderValidationError('حقل المفتاح المغلف backupWrappedDek مفقود.');
   }
   const wrappedLen = Array.isArray(header.backupWrappedDek) || header.backupWrappedDek instanceof Uint8Array
@@ -735,10 +799,11 @@ export const validateBackupHeaderPreDerivation = (
     throw new BackupHeaderValidationError('طول المفتاح المغلف backupWrappedDek غير صالح.');
   }
 
-  if (!Number.isInteger(header.dekVersion) || header.dekVersion < 1) {
-    throw new BackupHeaderValidationError(`رقم إصدار المفتاح dekVersion غير صالح: ${header.dekVersion}`);
+  if (typeof header.dekVersion !== 'number' || !Number.isInteger(header.dekVersion) || header.dekVersion < 1) {
+    throw new BackupHeaderValidationError(`رقم إصدار المفتاح dekVersion غير صالح: ${String(header.dekVersion)}`);
   }
   if (
+    typeof header.encryptionInvocationCount !== 'number' ||
     !Number.isInteger(header.encryptionInvocationCount) ||
     header.encryptionInvocationCount < 0 ||
     header.encryptionInvocationCount > MAX_GCM_INVOCATIONS_PER_DEK
@@ -751,7 +816,7 @@ export const validateBackupHeaderPreDerivation = (
     header.payloadLength > maxPayloadSizeBytes
   ) {
     throw new BackupHeaderValidationError(
-      `حجم حمولة النسخة (${header.payloadLength} بايت) غير صالح أو يتجاوز الحد الأقصى (${maxPayloadSizeBytes} بايت).`
+      `حجم حمولة النسخة (${String(header.payloadLength)} بايت) غير صالح أو يتجاوز الحد الأقصى (${maxPayloadSizeBytes} بايت).`
     );
   }
 };
@@ -811,7 +876,7 @@ export const encryptRecordPayload = async <T>(
  * 3. Web Crypto API operations run outside the IndexedDB transaction.
  */
 export const encryptRecordWithMandatoryReservation = async <T>(
-  database: any,
+  database: VaultDatabaseHandle,
   dek: CryptoKey,
   tableName: string,
   recordId: string,
@@ -971,7 +1036,7 @@ export const benchmarkKdf = async (
  * If the limit would be exceeded, rejects the operation and throws DekExhaustedError.
  */
 export const atomicReserveInvocationCount = async (
-  database: any,
+  database: VaultDatabaseHandle,
   dek: CryptoKey,
   count = 1
 ): Promise<number> => {

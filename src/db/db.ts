@@ -9,6 +9,17 @@ import type {
   EncryptedSessionEntity,
   EncryptedSoapEntity,
   EncryptedClinicalAddendumEntity,
+  EncryptedAppointmentEntity,
+  EncryptedWaitingListEntity,
+  EncryptedInvoiceEntity,
+  EncryptedPaymentEntity,
+  EncryptedExpenseEntity,
+  EncryptedAuditLogEntity,
+  EncryptedStaffStateEntity,
+  EncryptedEpisodeClinicalEntity,
+  EncryptedCustomWidgetEntity,
+  EncryptedMigrationReportEntity,
+  MigrationStateEntity,
   VaultMetaEntity,
   EpisodeSequenceEntity,
   PatientDependentRecordsSummary,
@@ -22,6 +33,17 @@ export class PhysioRecordDatabase extends Dexie {
   sessions!: Table<EncryptedSessionEntity, string>;
   soapNotes!: Table<EncryptedSoapEntity, string>;
   clinicalAddenda!: Table<EncryptedClinicalAddendumEntity, string>;
+  appointments!: Table<EncryptedAppointmentEntity, string>;
+  waitingList!: Table<EncryptedWaitingListEntity, string>;
+  invoices!: Table<EncryptedInvoiceEntity, string>;
+  payments!: Table<EncryptedPaymentEntity, string>;
+  expenses!: Table<EncryptedExpenseEntity, string>;
+  auditLogs!: Table<EncryptedAuditLogEntity, string>;
+  staffState!: Table<EncryptedStaffStateEntity, string>;
+  episodeClinical!: Table<EncryptedEpisodeClinicalEntity, string>;
+  customWidgets!: Table<EncryptedCustomWidgetEntity, string>;
+  migrationReports!: Table<EncryptedMigrationReportEntity, string>;
+  migrationState!: Table<MigrationStateEntity, string>;
   vaultMeta!: Table<VaultMetaEntity, string>;
   episodeSequences!: Table<EpisodeSequenceEntity, string>;
 
@@ -50,7 +72,7 @@ export class PhysioRecordDatabase extends Dexie {
     }).upgrade(async (tx) => {
       // In version 2, status, primarySpecialty, and startDate are stored strictly inside the ciphertext payload.
       // Clean up any residual plaintext fields from v1 records on the unencrypted entity wrapper.
-      await tx.table('episodes').toCollection().modify((entity: any) => {
+      await tx.table('episodes').toCollection().modify((entity: Record<string, unknown>) => {
         delete entity.status;
         delete entity.primarySpecialty;
         delete entity.startDate;
@@ -71,7 +93,7 @@ export class PhysioRecordDatabase extends Dexie {
       vaultMeta: '&id',
     }).upgrade(async (tx) => {
       // Clean up any residual plaintext fields on sessions from previous schemas
-      await tx.table('sessions').toCollection().modify((entity: any) => {
+      await tx.table('sessions').toCollection().modify((entity: Record<string, unknown>) => {
         delete entity.sessionType;
         delete entity.sessionDate;
         delete entity.sessionStatus;
@@ -88,6 +110,30 @@ export class PhysioRecordDatabase extends Dexie {
       sessions: '&id, episodeId, patientId, createdAt, updatedAt',
       soapNotes: '&id, &sessionId, episodeId, patientId, createdAt, updatedAt',
       clinicalAddenda: '&id, sessionId, patientId, targetId, createdAt',
+      vaultMeta: '&id',
+      episodeSequences: '&episodeId',
+    });
+
+    // Version 5 Schema Definition (Phase 1A: Encrypted Clinic Operations & Workspace Stores)
+    // Note: Session flowsheets are unified directly inside `soapNotes` (single source of truth).
+    // Data migration from localStorage runs after vault unlock (requires operational DEK).
+    this.version(5).stores({
+      patients: '&id, createdAt, updatedAt, isArchived',
+      episodes: '&id, patientId, createdAt, updatedAt',
+      sessions: '&id, episodeId, patientId, createdAt, updatedAt',
+      soapNotes: '&id, &sessionId, episodeId, patientId, createdAt, updatedAt',
+      clinicalAddenda: '&id, sessionId, patientId, targetId, createdAt',
+      appointments: '&id, patientId, createdAt, updatedAt',
+      waitingList: '&id, createdAt, updatedAt',
+      invoices: '&id, patientId, episodeId, createdAt, updatedAt',
+      payments: '&id, invoiceId, patientId, createdAt, updatedAt',
+      expenses: '&id, createdAt, updatedAt',
+      auditLogs: '&id, createdAt',
+      staffState: '&id, updatedAt',
+      episodeClinical: '&id, &episodeId, patientId, createdAt, updatedAt',
+      customWidgets: '&id, createdAt, updatedAt',
+      migrationReports: '&id, createdAt',
+      migrationState: '&id',
       vaultMeta: '&id',
       episodeSequences: '&episodeId',
     });
@@ -170,9 +216,10 @@ export class PhysioRecordDatabase extends Dexie {
         if (parsed.header?.magic !== 'PHYSIORECORD_BACKUP_V1.1') {
           throw new Error('المعرف السحري للنسخة الاحتياطية غير صالح.');
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'ملف النسخة تالف أو غير صالح';
         throw new PatientHardDeletionBlockedError(
-          `فشل التحقق من سلامة النسخة الاحتياطية قبل الحذف: ${err?.message || 'ملف النسخة تالف أو غير صالح'}. تم حظر الحذف لحماية السجلات.`
+          `فشل التحقق من سلامة النسخة الاحتياطية قبل الحذف: ${msg}. تم حظر الحذف لحماية السجلات.`
         );
       }
     }

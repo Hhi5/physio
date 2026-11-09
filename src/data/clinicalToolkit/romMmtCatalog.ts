@@ -11,6 +11,7 @@ import type {
   MmtGradeValue,
   MmtGravityCondition,
   RomMeasurementEntry,
+  MmtMeasurementEntry,
   RomAssessmentBatteryData,
   MmtAssessmentBatteryData,
 } from '../../types/clinical';
@@ -652,3 +653,129 @@ export function compareLongitudinalRomEntries(
     deltaDegrees: delta,
   };
 }
+
+/**
+ * Finds the matching baseline ROM measurement entry for a longitudinal comparison.
+ * Matches strictly by jointId + movementId + laterality + movementType (AROM/PROM/AAROM).
+ */
+export function findMatchingBaselineRomEntry(
+  baselineEntries: RomMeasurementEntry[],
+  current: RomMeasurementEntry
+): RomMeasurementEntry | undefined {
+  return baselineEntries.find(
+    (b) =>
+      b.jointId === current.jointId &&
+      b.movementId === current.movementId &&
+      b.laterality === current.laterality &&
+      b.movementType === current.movementType
+  );
+}
+
+export interface LongitudinalMmtComparisonResult {
+  isComparable: boolean;
+  rankDelta: number | null;
+  baselineGrade: MmtGradeValue | null;
+  currentGrade: MmtGradeValue | null;
+  gravityConditionChanged: boolean;
+  reasonAr?: string;
+  reasonEn?: string;
+}
+
+/**
+ * Finds the matching baseline MMT measurement entry for a longitudinal comparison.
+ * Prioritizes exact match on muscleGroupId + laterality + gravityCondition,
+ * falling back to muscleGroupId + laterality when a patient progresses from
+ * gravity_eliminated (grades 0–2) to against_gravity (grades 3–5).
+ */
+export function findMatchingBaselineMmtEntry(
+  baselineEntries: MmtMeasurementEntry[],
+  current: MmtMeasurementEntry
+): MmtMeasurementEntry | undefined {
+  const exactGravityMatch = baselineEntries.find(
+    (b) =>
+      b.muscleGroupId === current.muscleGroupId &&
+      b.laterality === current.laterality &&
+      b.gravityCondition === current.gravityCondition
+  );
+  if (exactGravityMatch) return exactGravityMatch;
+
+  return baselineEntries.find(
+    (b) =>
+      b.muscleGroupId === current.muscleGroupId &&
+      b.laterality === current.laterality
+  );
+}
+
+const MRC_GRADE_RANK: Record<MmtGradeValue, number> = {
+  '0': 0,
+  '1': 1,
+  '2-': 2,
+  '2': 3,
+  '2+': 4,
+  '3-': 5,
+  '3': 6,
+  '3+': 7,
+  '4-': 8,
+  '4': 9,
+  '4+': 10,
+  '5': 11,
+};
+
+/**
+ * Compares two MMT entries longitudinally using the MRC 0–5 ordinal rank scale.
+ */
+export function compareLongitudinalMmtEntries(
+  baseline: MmtMeasurementEntry,
+  current: MmtMeasurementEntry
+): LongitudinalMmtComparisonResult {
+  if (
+    baseline.muscleGroupId !== current.muscleGroupId ||
+    baseline.laterality !== current.laterality
+  ) {
+    return {
+      isComparable: false,
+      rankDelta: null,
+      baselineGrade: baseline.gradeValue,
+      currentGrade: current.gradeValue,
+      gravityConditionChanged: baseline.gravityCondition !== current.gravityCondition,
+      reasonAr: 'المجموعة العضلية أو الجهة غير متطابقة.',
+      reasonEn: 'Muscle group or laterality mismatch.',
+    };
+  }
+
+  if (!baseline.isTested || !current.isTested || !baseline.gradeValue || !current.gradeValue) {
+    return {
+      isComparable: false,
+      rankDelta: null,
+      baselineGrade: baseline.gradeValue,
+      currentGrade: current.gradeValue,
+      gravityConditionChanged: baseline.gravityCondition !== current.gravityCondition,
+      reasonAr: 'أحد القياسين غير مفحوص سريرياً (Not Tested).',
+      reasonEn: 'One of the MMT entries was not clinically tested.',
+    };
+  }
+
+  const baseRank = MRC_GRADE_RANK[baseline.gradeValue];
+  const currRank = MRC_GRADE_RANK[current.gradeValue];
+
+  if (typeof baseRank !== 'number' || typeof currRank !== 'number') {
+    return {
+      isComparable: false,
+      rankDelta: null,
+      baselineGrade: baseline.gradeValue,
+      currentGrade: current.gradeValue,
+      gravityConditionChanged: baseline.gravityCondition !== current.gravityCondition,
+      reasonAr: 'درجة القوة العضلية غير صالحة للمقارنة.',
+      reasonEn: 'Invalid MRC grade value.',
+    };
+  }
+
+  return {
+    isComparable: true,
+    rankDelta: currRank - baseRank,
+    baselineGrade: baseline.gradeValue,
+    currentGrade: current.gradeValue,
+    gravityConditionChanged: baseline.gravityCondition !== current.gravityCondition,
+  };
+}
+

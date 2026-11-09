@@ -103,7 +103,9 @@ export const LongitudinalComparisonView: React.FC<LongitudinalComparisonViewProp
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={snapshotType}
-            onChange={(e) => setSnapshotType(e.target.value as any)}
+            onChange={(e) =>
+              setSnapshotType(e.target.value as ClinicalAssessmentSnapshot['snapshotType'])
+            }
             className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200"
           >
             <option value="initial_evaluation">

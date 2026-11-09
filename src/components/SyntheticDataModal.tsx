@@ -4,6 +4,7 @@
 // =======================================================================
 
 import React, { useState } from 'react';
+import { db } from '../db/db';
 import { usePatients } from '../context/PatientContext';
 import { useVault } from '../context/VaultContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -11,6 +12,7 @@ import { SYNTHETIC_PATIENTS } from '../data/syntheticPatients';
 import { EpisodeService } from '../services/episodeService';
 import { SessionService } from '../services/sessionService';
 import { SoapService } from '../services/soapService';
+import { computePatientAge } from '../utils/date';
 import { X, Database, ShieldCheck, Sparkles, CheckCircle2 } from 'lucide-react';
 import type {
   EpisodeClinicalData,
@@ -39,11 +41,23 @@ export const SyntheticDataModal: React.FC<SyntheticDataModalProps> = ({
     try {
       let count = 0;
       for (let i = 0; i < SYNTHETIC_PATIENTS.length; i++) {
-        const patientData = SYNTHETIC_PATIENTS[i];
-        const existing = patients.find(
-          (p) => p.data.fullNameAr === patientData.fullNameAr || p.data.fullName === patientData.fullName
+        const { id: fixedId, ...patientData } = SYNTHETIC_PATIENTS[i];
+        if (!fixedId) {
+          continue;
+        }
+        // Check both IndexedDB by fixed ID and in-memory decrypted patients by name
+        const existingById = await db.patients.get(fixedId);
+        const existingByName = patients.find(
+          (p) =>
+            p.id === fixedId ||
+            p.data.fullNameAr === patientData.fullNameAr ||
+            p.data.fullName === patientData.fullName
         );
-        const savedPatient = await savePatient(patientData, existing?.id);
+        // Never overwrite an existing patient record
+        if (existingById || existingByName) {
+          continue;
+        }
+        const savedPatient = await savePatient(patientData, fixedId);
         count++;
 
         // For Patient 1 (Ahmed Al-Shammari - Knee ACL Rehab), seed Episode of Care + 2 Sessions + Full SOAP notes
@@ -407,7 +421,7 @@ export const SyntheticDataModal: React.FC<SyntheticDataModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
+  if (!import.meta.env.DEV || !isOpen) return null;
 
   return (
     <div
@@ -468,7 +482,7 @@ export const SyntheticDataModal: React.FC<SyntheticDataModalProps> = ({
                 <div className="flex items-center justify-between font-bold text-slate-800 mb-1">
                   <span>{isRtl ? p.fullNameAr : p.fullName}</span>
                   <span className="text-teal-700 font-normal">
-                    {p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}، {p.age} {bi('سنة', 'yo')}
+                    {p.gender === 'male' ? bi('ذكر', 'Male') : bi('أنثى', 'Female')}، {computePatientAge(p.dateOfBirth, p.age)} {bi('سنة', 'yo')}
                   </span>
                 </div>
                 <p className="text-slate-500 line-clamp-1">{p.medicalHistory}</p>

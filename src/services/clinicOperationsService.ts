@@ -18,6 +18,7 @@ import type {
   IraqiPaymentMethod,
   ClinicExpenseIQD,
 } from '../types/clinicManagement';
+import { localDate } from '../utils/date';
 
 const STORAGE_KEYS = {
   ACTIVE_STAFF_ID: 'physiorecord_active_staff_v2',
@@ -378,7 +379,7 @@ export const PT_EXERCISE_CATALOG: ExerciseLibraryItem[] = [
 // -----------------------------------------------------------------------
 export function formatIQD(amount: number, isAr = true): string {
   const safe = Number.isFinite(amount) ? Math.round(amount) : 0;
-  const formatted = safe.toLocaleString('en-US');
+  const formatted = new Intl.NumberFormat('en-GB').format(safe);
   return isAr ? `${formatted} د.ع` : `${formatted} IQD`;
 }
 
@@ -557,7 +558,7 @@ export class ClinicOperationsService {
   ): ClinicalAssessmentSnapshot {
     const store = this.getEpisodeClinicalStore(episodeId, patientId);
     const staff = this.getActiveStaff();
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
 
     const romEntries = store.objective?.romBattery?.entries || [];
     const mmtEntries = store.objective?.mmtBattery?.entries || [];
@@ -660,7 +661,7 @@ export class ClinicOperationsService {
     } catch {
       // ignore
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const defaults: ClinicAppointment[] = [
       {
         id: 'appt_default_1',
@@ -765,7 +766,7 @@ export class ClinicOperationsService {
         preferredDays: 'السبت، الإثنين، الأربعاء',
         preferredTimeWindow: 'evening',
         priority: 'urgent',
-        addedAt: new Date().toISOString().split('T')[0],
+        addedAt: localDate(),
         notes: 'يرغب بموعد مسائي بعد الساعة 4 عصراً',
       },
       {
@@ -777,7 +778,7 @@ export class ClinicOperationsService {
         preferredDays: 'الأحد، الثلاثاء، الخميس',
         preferredTimeWindow: 'morning',
         priority: 'normal',
-        addedAt: new Date().toISOString().split('T')[0],
+        addedAt: localDate(),
       },
     ];
     localStorage.setItem(STORAGE_KEYS.WAITING_LIST, JSON.stringify(defaults));
@@ -789,7 +790,7 @@ export class ClinicOperationsService {
     const newEntry: WaitingListEntry = {
       ...entry,
       id: `wait_${Date.now()}`,
-      addedAt: new Date().toISOString().split('T')[0],
+      addedAt: localDate(),
     };
     const updated = [newEntry, ...list];
     localStorage.setItem(STORAGE_KEYS.WAITING_LIST, JSON.stringify(updated));
@@ -810,7 +811,7 @@ export class ClinicOperationsService {
     } catch {
       // ignore
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const defaults: FinancialInvoiceIQD[] = [
       {
         id: 'inv_iqd_1001',
@@ -898,7 +899,7 @@ export class ClinicOperationsService {
   }): FinancialInvoiceIQD {
     const list = this.getInvoicesIQD();
     const staff = this.getActiveStaff();
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const netAmountIQD = Math.max(0, params.totalAmountIQD - params.discountIQD);
     const paidAmountIQD = Math.min(netAmountIQD, Math.max(0, params.initialPaidIQD));
     const balanceDueIQD = Math.max(0, netAmountIQD - paidAmountIQD);
@@ -972,7 +973,7 @@ export class ClinicOperationsService {
   ): FinancialInvoiceIQD[] {
     const list = this.getInvoicesIQD();
     const staff = this.getActiveStaff();
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
 
     const updated = list.map((inv) => {
       if (inv.id !== invoiceId) return inv;
@@ -1059,7 +1060,7 @@ export class ClinicOperationsService {
     } catch {
       // ignore
     }
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDate();
     const defaults: ClinicExpenseIQD[] = [
       {
         id: 'exp_1',

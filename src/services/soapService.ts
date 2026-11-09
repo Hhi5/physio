@@ -13,8 +13,10 @@ import {
 import { ReferentialIntegrityError } from '../db/registry';
 import {
   CannotDeleteFinalizedRecordError,
+  CURRENT_SOAP_SCHEMA_VERSION,
   type SoapNoteRecord,
   type SoapNoteData,
+  type SoapFlowsheetData,
   type EncryptedSoapEntity,
   type ClinicalAddendumRecord,
   type ClinicalAddendumData,
@@ -22,6 +24,7 @@ import {
   type AddendumReason,
   type SessionClinicalData,
 } from '../types/clinical';
+import { localDate } from '../utils/date';
 
 export class SoapService {
   /**
@@ -58,7 +61,50 @@ export class SoapService {
   }
 
   /**
+   * Fetch the most recent non-empty session flowsheet for an episode directly from encrypted `db.soapNotes`.
+   * Single source of truth for "Copy Previous Flowsheet" carry-forward.
+   */
+  static async getLatestEpisodeFlowsheet(
+    episodeId: string,
+    excludeSessionId: string | undefined,
+    dek: CryptoKey,
+    database: PhysioRecordDatabase = defaultDb
+  ): Promise<SoapFlowsheetData | null> {
+    if (!episodeId || typeof episodeId !== 'string') return null;
+
+    const entities = await database.soapNotes.where('episodeId').equals(episodeId).toArray();
+    if (entities.length === 0) return null;
+
+    const decryptedNotes: SoapNoteRecord[] = [];
+    for (const entity of entities) {
+      if (excludeSessionId && entity.sessionId === excludeSessionId) continue;
+      try {
+        const note = await this.decryptSoapEntity(entity, dek);
+        const fs = note.data.objective?.flowsheet;
+        if (
+          fs &&
+          (fs.exercises?.length > 0 ||
+            fs.manualTherapy?.length > 0 ||
+            fs.physicalAgents?.length > 0)
+        ) {
+          decryptedNotes.push(note);
+        }
+      } catch {
+        // Ignore notes that fail decryption
+      }
+    }
+
+    if (decryptedNotes.length === 0) return null;
+
+    decryptedNotes.sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+    return decryptedNotes[0].data.objective?.flowsheet || null;
+  }
+
+  /**
    * Decrypt a raw EncryptedSoapEntity from the database.
+   * Backward-compatible with v1 SOAP notes that lack soapSchemaVersion, postSessionPainNrs, or objective.flowsheet.
    */
   private static async decryptSoapEntity(
     entity: EncryptedSoapEntity,
@@ -86,14 +132,17 @@ export class SoapService {
       patientId: entity.patientId,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
-      data: decryptedData,
+      data: {
+        ...decryptedData,
+        soapSchemaVersion: decryptedData.soapSchemaVersion ?? 1,
+      },
     };
   }
 
   /**
    * Create a new SOAP note for a Clinical Session.
    * Strictly enforces 1:1 relationship: rejects creation if a SOAP note already exists for this session.
-   * Enforces referential integrity: session and parent patient/episode must exist and match.
+   * Enforces referential integrity and rejects creation if parent session is already finalized.
    */
   static async createSoapNote(
     patientId: string,
@@ -132,6 +181,23 @@ export class SoapService {
       );
     }
 
+    // 2b. Service-layer immutability: Reject creating SOAP note if parent session is already finalized
+    const sessionDecrypted = await decryptRecordPayload<SessionClinicalData>(
+      dek,
+      'sessions',
+      session.id,
+      [session.patientId, session.episodeId],
+      session.iv,
+      session.ciphertext,
+      session.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+      session.dekVersion || CURRENT_DEK_VERSION
+    );
+    if (sessionDecrypted.status === 'finalized') {
+      throw new Error(
+        'لا يمكن إنشاء ملاحظة SOAP جديدة لجلسة سريرية معتمدة ومغلقة نهائياً.'
+      );
+    }
+
     // 3. STRICT 1:1 ENFORCEMENT: Reject duplicate SOAP note for the same session!
     const existingSoap = await database.soapNotes.where('sessionId').equals(sessionId).first();
     if (existingSoap) {
@@ -154,13 +220,14 @@ export class SoapService {
       score,
       range: '0-10' as const,
       unit: 'points' as const,
-      assessedAt: now.split('T')[0],
+      assessedAt: localDate(),
       scoreBestLast24h: data.subjective?.painVasBestLast24h,
       scoreWorstLast24h: data.subjective?.painVasWorstLast24h,
     };
 
     const fullData: SoapNoteData = {
       ...data,
+      soapSchemaVersion: CURRENT_SOAP_SCHEMA_VERSION,
       subjective: {
         ...data.subjective,
         painNrsScore: score,
@@ -214,7 +281,8 @@ export class SoapService {
 
   /**
    * Update an existing draft SOAP note.
-   * Rejects modification if the associated session is finalized.
+   * Strictly enforces immutability in the service layer: rejects modification if the note
+   * OR its parent session is finalized.
    */
   static async updateSoapNote(
     soapId: string,
@@ -227,11 +295,31 @@ export class SoapService {
       throw new Error(`ملاحظة SOAP بالمعرف "${soapId}" غير موجودة.`);
     }
 
-    // IMMUTABILITY RULE: Cannot update finalized note
+    // IMMUTABILITY RULE 1: Cannot update finalized SOAP note
     if (existing.data.isFinalized) {
       throw new Error(
         'لا يمكن تعديل ملاحظة SOAP معتمدة نهائياً. يسمح النظام بإضافة ملحق سريري (Clinical Addendum) للتصحيح.'
       );
+    }
+
+    // IMMUTABILITY RULE 2: Cannot update SOAP note if parent session is finalized
+    const parentSession = await database.sessions.get(existing.sessionId);
+    if (parentSession) {
+      const sessionDecrypted = await decryptRecordPayload<SessionClinicalData>(
+        dek,
+        'sessions',
+        parentSession.id,
+        [parentSession.patientId, parentSession.episodeId],
+        parentSession.iv,
+        parentSession.ciphertext,
+        parentSession.recordCryptoVersion || CURRENT_RECORD_CRYPTO_VERSION,
+        parentSession.dekVersion || CURRENT_DEK_VERSION
+      );
+      if (sessionDecrypted.status === 'finalized') {
+        throw new Error(
+          'لا يمكن تعديل ملاحظة SOAP التابعة لجلسة سريرية معتمدة ومغلقة نهائياً. يسمح النظام فقط بإضافة ملحق سريري (Clinical Addendum).'
+        );
+      }
     }
 
     const meta = await database.vaultMeta.get('auth');
@@ -265,7 +353,7 @@ export class SoapService {
           score,
           range: '0-10' as const,
           unit: 'points' as const,
-          assessedAt: now.split('T')[0],
+          assessedAt: localDate(),
           scoreBestLast24h: data.subjective?.painVasBestLast24h ?? existing.data.subjective?.painVasBestLast24h,
           scoreWorstLast24h: data.subjective?.painVasWorstLast24h ?? existing.data.subjective?.painVasWorstLast24h,
         };
@@ -273,12 +361,17 @@ export class SoapService {
     const updatedData: SoapNoteData = {
       ...existing.data,
       ...data,
+      soapSchemaVersion: CURRENT_SOAP_SCHEMA_VERSION,
       subjective: {
         ...existing.data.subjective,
         ...data.subjective,
         painNrsScore: score,
         painAssessment,
         painVasCurrent: score,
+      },
+      objective: {
+        ...existing.data.objective,
+        ...data.objective,
       },
       isFinalized: false,
     };
@@ -340,6 +433,7 @@ export class SoapService {
 
     const finalizedData: SoapNoteData = {
       ...existing.data,
+      soapSchemaVersion: existing.data.soapSchemaVersion ?? CURRENT_SOAP_SCHEMA_VERSION,
       isFinalized: true,
       finalizedAt: now,
       finalizedBy: therapistName,

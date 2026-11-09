@@ -355,17 +355,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="truncate">{isAr ? 'نسخ احتياطي' : 'Backup'}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              onOpenSyntheticData();
-              if (onCloseMobile) onCloseMobile();
-            }}
-            className="flex-1 min-h-[38px] p-2 rounded-xl text-[11px] font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <FlaskConical className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-            <span className="truncate">{isAr ? 'بيانات تجريبية' : 'Demo Data'}</span>
-          </button>
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={() => {
+                onOpenSyntheticData();
+                if (onCloseMobile) onCloseMobile();
+              }}
+              className="flex-1 min-h-[38px] p-2 rounded-xl text-[11px] font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <FlaskConical className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span className="truncate">{isAr ? 'بيانات تجريبية' : 'Demo Data'}</span>
+            </button>
+          )}
         </div>
 
         <div className="pt-1 flex items-center justify-between gap-2">

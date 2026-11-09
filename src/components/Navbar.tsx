@@ -82,16 +82,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="font-semibold">{language === 'ar' ? 'English' : 'العربية'}</span>
           </button>
 
-          {/* Add Synthetic Data Button */}
-          <button
-            type="button"
-            onClick={onOpenSyntheticModal}
-            title="إضافة حالات سريرية تجريبية للاختبار"
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors border border-slate-200"
-          >
-            <Database className="w-3.5 h-3.5 text-slate-500" />
-            <span>{t('syntheticData')}</span>
-          </button>
+          {/* Add Synthetic Data Button (DEV only) */}
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={onOpenSyntheticModal}
+              title="إضافة حالات سريرية تجريبية للاختبار"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors border border-slate-200"
+            >
+              <Database className="w-3.5 h-3.5 text-slate-500" />
+              <span>{t('syntheticData')}</span>
+            </button>
+          )}
 
           {/* Backup and Restore Button */}
           <button

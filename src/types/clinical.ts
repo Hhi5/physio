@@ -1,11 +1,18 @@
 // =======================================================================
-// PhysioRecord — Clinical Domain Types & Database Entities (v1.1)
+// PhysioRecord — Clinical Domain Types & Database Entities (v1.1 / v5)
 // =======================================================================
+
+import type {
+  OrthopedicSpecialTestItem,
+  GaitPostureData,
+  FunctionalScaleEntry,
+} from './clinicalWidgets';
 
 export type Gender = 'male' | 'female' | 'other';
 export type DominantHand = 'right' | 'left' | 'ambidextrous';
 
 export type EpisodeStatus = 'active' | 'completed' | 'on_hold' | 'archived';
+
 
 export type SessionType = 
   | 'initial_evaluation'
@@ -545,10 +552,75 @@ export const BODY_SYMPTOM_TYPES: Record<
   },
 };
 
+export type ExerciseAnatomicalRegion =
+  | 'cervical'
+  | 'shoulder'
+  | 'elbow_wrist'
+  | 'thoracic_lumbar'
+  | 'hip_pelvis'
+  | 'knee'
+  | 'ankle_foot'
+  | 'neuro_balance';
+
+export interface FlowsheetExerciseEntry {
+  id: string;
+  exerciseId?: string;
+  nameAr: string;
+  nameEn: string;
+  region: ExerciseAnatomicalRegion;
+  sets: number;
+  reps: number;
+  holdSeconds: number;
+  loadOrBand: string; // e.g. 'Yellow Band', '3 kg', 'Bodyweight'
+  rpeOrPainResponse: 'pain_free' | 'mild_discomfort' | 'painful_modified';
+  notes?: string;
+}
+
+export interface ManualTherapyFlowsheetEntry {
+  id: string;
+  techniqueAr: string;
+  techniqueEn: string;
+  targetJointOrTissue: string;
+  gradeOrIntensity: 'Grade I' | 'Grade II' | 'Grade III' | 'Grade IV' | 'MWM' | 'Soft Tissue';
+  durationMinutes: number;
+  patientResponse?: string;
+}
+
+export interface PhysicalAgentFlowsheetEntry {
+  id: string;
+  modality:
+    | 'TENS'
+    | 'IFC'
+    | 'Ultrasound'
+    | 'NMES'
+    | 'Laser'
+    | 'Cryotherapy'
+    | 'HotPack'
+    | 'DryNeedling'
+    | 'Shockwave'
+    | 'Traction';
+  modalityAr: string;
+  site: string;
+  parameters: string;
+  durationMinutes: number;
+}
+
+/**
+ * Unified SOAP Objective Flowsheet (embedded inside SoapObjectiveData.flowsheet).
+ * Note: Pre-session pain lives exclusively in `subjective.painNrsScore`, and
+ * post-session pain lives in `subjective.postSessionPainNrs` (no duplicate pain fields here).
+ */
+export interface SoapFlowsheetData {
+  exercises: FlowsheetExerciseEntry[];
+  manualTherapy: ManualTherapyFlowsheetEntry[];
+  physicalAgents: PhysicalAgentFlowsheetEntry[];
+}
+
 export interface SoapSubjectiveData {
   chiefComplaint: string; // شكوى المريض الحالية (Mandatory for finalize)
   symptomChangesSinceLastSession?: string; // تغير الأعراض منذ الجلسة السابقة
-  painNrsScore?: number; // 0 - 10 Numeric Rating Scale (NRS)
+  painNrsScore?: number; // 0 - 10 Pre-Session Numeric Rating Scale (NRS) — Single source of truth for pre-session pain
+  postSessionPainNrs?: number; // 0 - 10 Post-Session Numeric Rating Scale (NRS)
   painAssessment?: PainAssessmentNRS; // Structured Pain NRS record
   painLocationDescription?: string; // موضع الألم وطبيعته حسب وصف المريض
   bodyChart?: PatientBodyChartData; // مخطط رسم وتوثيق أعراض المريض السريري المشفر (Milestone 2)
@@ -697,10 +769,18 @@ export interface SoapObjectiveData {
   status?: ObjectiveAssessmentStatus; // 'assessed' | 'normal_findings' | 'not_assessed'
   objectiveFindings?: string; // نتائج الفحص والملاحظات الموضوعية
   clinicalObservations?: string; // المشاهدات السريرية (المشية، القوام، التورم)
+  observationPosture?: string;
+  palpationFindings?: string;
+  circumferenceEdemaNotes?: string;
   functionalOrPreliminaryMeasurements?: string; // قياسات أولية/وظيفية عامة قبل وحدات ROM/MMT
   romBattery?: RomAssessmentBatteryData; // بطارية قياس المدى الحركي (Milestone 3)
   mmtBattery?: MmtAssessmentBatteryData; // بطارية الفحص العضلي اليدوي (Milestone 3)
   neuroScreening?: NeuroScreeningBatteryData; // الفحص العصبي السريري (Myotomes / Dermatomes / Reflexes)
+  specialTests?: OrthopedicSpecialTestItem[]; // الفحوصات الاستفزازية الخاصة
+  gaitPosture?: GaitPostureData; // تحليل المشية والتوازن
+  functionalScales?: FunctionalScaleEntry; // المقاييس الوظيفية المعتمدة (ODI / QuickDASH / LEFS / NDI)
+  customWidgetsData?: Record<string, Record<string, unknown>>; // بيانات الوحدات السريرية المخصصة
+  flowsheet?: SoapFlowsheetData; // جدول التمارين والعلاج اليدوي والوسائل الفيزيائية للجلسة (Single Source of Truth)
   dailyInterventionsSummary?: string; // ملخص التدخلات والعلاجات المنفذة في هذه الجلسة
   isWithinNormalLimits?: boolean; // نتائج الفحص طبيعية بالكامل ضمن الحدود المقبولة
   notAssessedReason?: string; // سبب عدم إجراء فحص موضوعي (إلزامي إذا تم اختيار not_assessed)
@@ -720,7 +800,10 @@ export interface SoapPlanData {
   nextAppointmentDate?: string; // تاريخ الموعد القادم
 }
 
+export const CURRENT_SOAP_SCHEMA_VERSION = 2;
+
 export interface SoapNoteData {
+  soapSchemaVersion?: number; // 1 = legacy SOAP, 2 = unified SOAP with embedded flowsheet & postSessionPainNrs
   subjective: SoapSubjectiveData;
   objective: SoapObjectiveData;
   assessment: SoapAssessmentData;
@@ -729,6 +812,8 @@ export interface SoapNoteData {
   finalizedAt?: string;
   finalizedBy?: string;
   contentDigestSha256?: string;
+  repairedDuringMigration?: boolean; // Honest marker when half-finalized note was repaired from finalized session
+  repairedAt?: string;
 }
 
 export interface SoapNoteRecord {
@@ -833,3 +918,127 @@ export interface BackupHeader {
   maxBackupSizeBytes: number; // Enforced maximum backup size limit (25 MB)
   payloadLength?: number;
 }
+
+// -----------------------------------------------------------------------
+// Dexie v5 Encrypted Entities for Clinic Operations & Workspace Stores
+// (AES-256-GCM encrypted with per-record 12-byte IV & canonical entity-bound AAD)
+// -----------------------------------------------------------------------
+
+export interface EncryptedAppointmentEntity {
+  id: string;
+  patientId: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedWaitingListEntity {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedInvoiceEntity {
+  id: string;
+  patientId: string;
+  episodeId?: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedPaymentEntity {
+  id: string;
+  invoiceId: string;
+  patientId: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedExpenseEntity {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedAuditLogEntity {
+  id: string;
+  createdAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedStaffStateEntity {
+  id: string; // e.g. 'active_staff'
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedEpisodeClinicalEntity {
+  id: string; // matches episodeId
+  episodeId: string;
+  patientId: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedCustomWidgetEntity {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+export interface EncryptedMigrationReportEntity {
+  id: string;
+  createdAt: string;
+  recordCryptoVersion: number;
+  dekVersion: number;
+  iv: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
+/**
+ * Non-PHI technical state record tracking resumable/idempotent localStorage-to-Dexie v5 migration.
+ */
+export interface MigrationStateEntity {
+  id: string; // 'localStorage_v5_migration'
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  completedKeyHashes: string[];
+  failedKeyCount: number;
+  repairedSoapNotesCount: number;
+  conflictCount: number;
+  orphanFlowsheetCount: number;
+  updatedAt: string;
+}
+

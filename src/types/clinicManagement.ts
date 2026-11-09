@@ -6,7 +6,20 @@ import type {
   PatientBodyChartData,
   SoapObjectiveData,
   SessionType,
+  ExerciseAnatomicalRegion,
+  FlowsheetExerciseEntry,
+  ManualTherapyFlowsheetEntry,
+  PhysicalAgentFlowsheetEntry,
+  SoapFlowsheetData,
 } from './clinical';
+
+export type {
+  ExerciseAnatomicalRegion,
+  FlowsheetExerciseEntry,
+  ManualTherapyFlowsheetEntry,
+  PhysicalAgentFlowsheetEntry,
+  SoapFlowsheetData,
+};
 import type {
   OrthopedicSpecialTestItem,
   GaitPostureData,
@@ -53,16 +66,6 @@ export interface AuditLogEntry {
 // -----------------------------------------------------------------------
 // 2. Session Exercise & Modality Flowsheet + HEP Builder (Phase 6)
 // -----------------------------------------------------------------------
-export type ExerciseAnatomicalRegion =
-  | 'cervical'
-  | 'shoulder'
-  | 'elbow_wrist'
-  | 'thoracic_lumbar'
-  | 'hip_pelvis'
-  | 'knee'
-  | 'ankle_foot'
-  | 'neuro_balance';
-
 export type ExerciseTherapeuticGoal =
   | 'mobility_rom'
   | 'strengthening'
@@ -89,46 +92,18 @@ export interface ExerciseLibraryItem {
   precautionsEn?: string;
 }
 
-export interface FlowsheetExerciseEntry {
-  id: string;
-  exerciseId?: string;
-  nameAr: string;
-  nameEn: string;
-  region: ExerciseAnatomicalRegion;
-  sets: number;
-  reps: number;
-  holdSeconds: number;
-  loadOrBand: string; // e.g. 'Yellow Band', '3 kg', 'Bodyweight'
-  rpeOrPainResponse: 'pain_free' | 'mild_discomfort' | 'painful_modified';
-  notes?: string;
-}
-
-export interface ManualTherapyFlowsheetEntry {
-  id: string;
-  techniqueAr: string;
-  techniqueEn: string;
-  targetJointOrTissue: string;
-  gradeOrIntensity: 'Grade I' | 'Grade II' | 'Grade III' | 'Grade IV' | 'MWM' | 'Soft Tissue';
-  durationMinutes: number;
-  patientResponse?: string;
-}
-
-export interface PhysicalAgentFlowsheetEntry {
-  id: string;
-  modality: 'TENS' | 'IFC' | 'Ultrasound' | 'NMES' | 'Laser' | 'Cryotherapy' | 'HotPack' | 'DryNeedling' | 'Shockwave' | 'Traction';
-  modalityAr: string;
-  site: string;
-  parameters: string; // e.g., '100Hz, 150us' or '1MHz, 1.2 W/cm²'
-  durationMinutes: number;
-}
-
+/**
+ * Legacy localStorage shape used only when migrating pre-v5 `physiorecord_session_flowsheet_v2_*` keys.
+ * All active session flowsheets live inside `SoapNoteData.objective.flowsheet` (`SoapFlowsheetData`).
+ */
 export interface SessionFlowsheetData {
-  preSessionPainNrs: number;
-  postSessionPainNrs: number;
+  preSessionPainNrs?: number;
+  postSessionPainNrs?: number;
   exercises: FlowsheetExerciseEntry[];
   manualTherapy: ManualTherapyFlowsheetEntry[];
   physicalAgents: PhysicalAgentFlowsheetEntry[];
 }
+
 
 export interface HepPrescriptionItem {
   id: string;
@@ -217,7 +192,7 @@ export interface EpisodeScopedClinicalStore {
   specialTests: OrthopedicSpecialTestItem[];
   gaitPosture?: GaitPostureData;
   functionalScales?: FunctionalScaleEntry;
-  customWidgetsData: Record<string, any>;
+  customWidgetsData: Record<string, Record<string, unknown>>;
   // Longitudinal Comparison Snapshots (Initial Eval -> Re-evals -> Discharge)
   snapshots: ClinicalAssessmentSnapshot[];
   // Home Exercise Program (HEP) Scoped to THIS Episode

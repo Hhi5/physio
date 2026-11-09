@@ -4,8 +4,13 @@
 
 import type { PatientClinicalData } from '../types/clinical';
 
-export const SYNTHETIC_PATIENTS: PatientClinicalData[] = [
+export interface SyntheticPatientSeed extends PatientClinicalData {
+  id: string;
+}
+
+export const SYNTHETIC_PATIENTS: SyntheticPatientSeed[] = [
   {
+    id: "syn-patient-001",
     fullName: "Ahmed Al-Shammari",
     fullNameAr: "أحمد بن فهد الشمري",
     dateOfBirth: "1996-04-15",
@@ -26,6 +31,7 @@ export const SYNTHETIC_PATIENTS: PatientClinicalData[] = [
     generalNotes: "المريض ملتزم بالتعليمات ولديه وعي حركي ممتاز. الجلسات تركز حالياً على استعادة الامتداد الكامل للركبة (Full Extension) وتنشيط العضلة رباعية الرؤوس (Quad Activation)."
   },
   {
+    id: "syn-patient-002",
     fullName: "Maryam Al-Ali",
     fullNameAr: "مريم بنت صالح العلي",
     dateOfBirth: "1962-09-20",
@@ -46,6 +52,7 @@ export const SYNTHETIC_PATIENTS: PatientClinicalData[] = [
     generalNotes: "التركيز على إعادة التأهيل العصبي: التدريب على التوازن، استعادة نمط المشي المتناسق، وتسهيل حركات الطرف العلوي الأيمن باستخدام تقنيات PNF و Bobath."
   },
   {
+    id: "syn-patient-003",
     fullName: "Salem Al-Mansoor",
     fullNameAr: "سالم بن ناصر المنصور",
     dateOfBirth: "1958-11-03",
@@ -66,6 +73,7 @@ export const SYNTHETIC_PATIENTS: PatientClinicalData[] = [
     generalNotes: "يتم قياس العلامات الحيوية بدقة (النبض، ضغط الدم، تشبع الأكسجين SpO2، ومقياس بورغ للجهد الإدراكي RPE)."
   },
   {
+    id: "syn-patient-004",
     fullName: "Rayan Al-Khaled",
     fullNameAr: "ريان بن خالد الخالد",
     dateOfBirth: "2019-02-14",
@@ -86,6 +94,7 @@ export const SYNTHETIC_PATIENTS: PatientClinicalData[] = [
     generalNotes: "التركيز على إطالة عضلات الساق المشدودة، تقوية عضلات الجذع وعضلات الحوض، وتحسين نمط المشي المستقل بدون عكازات."
   },
   {
+    id: "syn-patient-005",
     fullName: "Fatima Al-Harbi",
     fullNameAr: "فاطمة بنت عبد الله الحربي",
     dateOfBirth: "1975-07-12",

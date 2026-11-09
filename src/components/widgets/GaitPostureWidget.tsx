@@ -139,7 +139,7 @@ export const GaitPostureWidget: React.FC<GaitPostureWidgetProps> = ({
           <select
             disabled={readOnly}
             value={currentData.gaitPattern}
-            onChange={(e) => handleUpdate({ gaitPattern: e.target.value as any })}
+            onChange={(e) => handleUpdate({ gaitPattern: e.target.value as GaitPostureData['gaitPattern'] })}
             className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-medium"
           >
             <option value="normal">{isAr ? 'طبيعي ومتناسق (Normal)' : 'Normal'}</option>
@@ -159,7 +159,7 @@ export const GaitPostureWidget: React.FC<GaitPostureWidgetProps> = ({
           <select
             disabled={readOnly}
             value={currentData.assistiveDevice}
-            onChange={(e) => handleUpdate({ assistiveDevice: e.target.value as any })}
+            onChange={(e) => handleUpdate({ assistiveDevice: e.target.value as GaitPostureData['assistiveDevice'] })}
             className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-medium"
           >
             <option value="none">{isAr ? 'بدون أداة مساعدة (Independent / None)' : 'None (Independent)'}</option>

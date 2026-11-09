@@ -173,7 +173,7 @@ export const CustomWidgetStudioModal: React.FC<CustomWidgetStudioModalProps> = (
   const [jsonInput, setJsonInput] = useState('');
   const [parsedWidget, setParsedWidget] = useState<CustomWidgetDefinition | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
-  const [previewState, setPreviewState] = useState<Record<string, any>>({});
+  const [previewState, setPreviewState] = useState<Record<string, unknown>>({});
 
   if (!isOpen) return null;
 
@@ -201,8 +201,8 @@ export const CustomWidgetStudioModal: React.FC<CustomWidgetStudioModalProps> = (
         );
       }
       setParsedWidget(parsed);
-    } catch (err: any) {
-      setParseError(err.message || 'Invalid JSON syntax');
+    } catch (err: unknown) {
+      setParseError(err instanceof Error ? err.message : 'Invalid JSON syntax');
       setParsedWidget(null);
     }
   };
@@ -219,8 +219,8 @@ export const CustomWidgetStudioModal: React.FC<CustomWidgetStudioModalProps> = (
       localStorage.setItem('physiorecord_custom_widgets', JSON.stringify(updated));
       onWidgetCreated(parsedWidget);
       onClose();
-    } catch (e: any) {
-      setParseError(e.message);
+    } catch (e: unknown) {
+      setParseError(e instanceof Error ? e.message : 'Error saving custom widget');
     }
   };
 

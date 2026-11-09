@@ -55,11 +55,12 @@ export const AddendumModal: React.FC<AddendumModalProps> = ({
   const [signedByTherapistName, setSignedByTherapistName] = useState('د. المعالج الطبيعي');
 
   useEffect(() => {
+    if (!isOpen) return;
     setReasonForAmendment('late_entry');
     setAmendmentText('');
     setSignedByTherapistName('د. المعالج الطبيعي');
     setError(null);
-  }, [isOpen, session]);
+  }, [isOpen, session.id]);
 
   if (!isOpen) return null;
 
@@ -84,9 +85,9 @@ export const AddendumModal: React.FC<AddendumModalProps> = ({
         signedByTherapistName: signedByTherapistName.trim(),
       });
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create addendum:', err);
-      setError(err?.message || 'فشل حفظ الملحق السريري.');
+      setError(err instanceof Error ? err.message : 'فشل حفظ الملحق السريري.');
     } finally {
       setSubmitting(false);
     }

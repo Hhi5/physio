@@ -52,8 +52,8 @@ export const LockScreen: React.FC = () => {
     setLoading(true);
     try {
       await setupPassword(password);
-    } catch (err: any) {
-      setError(err?.message || bi('فشل ضبط كلمة المرور', 'Failed to set password'));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : bi('فشل ضبط كلمة المرور', 'Failed to set password'));
     } finally {
       setLoading(false);
     }
@@ -74,8 +74,8 @@ export const LockScreen: React.FC = () => {
           )
         );
       }
-    } catch (err: any) {
-      setError(err?.message || bi('حدث خطأ أثناء فك التشفير', 'Error during decryption'));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : bi('حدث خطأ أثناء فك التشفير', 'Error during decryption'));
     } finally {
       setLoading(false);
     }
@@ -103,9 +103,10 @@ export const LockScreen: React.FC = () => {
           'Database wiped successfully. You can now set a new password.'
         )
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(
-        bi('حدث خطأ أثناء مسح قاعدة البيانات: ', 'Error during wipe: ') + err.message
+        bi('حدث خطأ أثناء مسح قاعدة البيانات: ', 'Error during wipe: ') +
+          (err instanceof Error ? err.message : String(err))
       );
     } finally {
       setLoading(false);

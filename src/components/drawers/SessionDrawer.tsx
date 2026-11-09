@@ -2,12 +2,13 @@
 // PhysioRecord — Session Scheduling Slide-over Drawer
 // =======================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Drawer } from '../layout/Drawer';
 import { useVault } from '../../context/VaultContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { SessionService } from '../../services/sessionService';
 import type { SessionClinicalData, SessionRecord, SessionType, AttendanceStatus } from '../../types/clinical';
+import { localDate } from '../../utils/date';
 import { Save } from 'lucide-react';
 
 interface SessionDrawerProps {
@@ -31,7 +32,7 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
   const { language } = useLanguage();
   const isAr = language === 'ar';
 
-  const [sessionDate, setSessionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [sessionDate, setSessionDate] = useState(localDate());
   const [sessionType, setSessionType] = useState<SessionType>(
     nextSessionNumber === 1 ? 'initial_evaluation' : 'follow_up'
   );
@@ -41,6 +42,17 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSessionDate(localDate());
+    setSessionType(nextSessionNumber === 1 ? 'initial_evaluation' : 'follow_up');
+    setDurationMinutes(45);
+    setPainVasScore(5);
+    setAttendanceStatus('attended');
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, episodeId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,9 +74,9 @@ export const SessionDrawer: React.FC<SessionDrawerProps> = ({
       const created = await SessionService.createSession(patientId, episodeId, payload, dek);
       onSessionCreated(created);
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create session:', err);
-      setError(err.message || 'Error creating clinical session');
+      setError(err instanceof Error ? err.message : 'Error creating clinical session');
     } finally {
       setSaving(false);
     }

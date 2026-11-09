@@ -3,9 +3,10 @@
 // Clinical discharge documentation, final outcome summary, and end date
 // =======================================================================
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import type { EpisodeRecord } from '../types/clinical';
+import { localDate } from '../utils/date';
 import { X, CheckCircle, AlertTriangle } from 'lucide-react';
 
 interface EpisodeDischargeModalProps {
@@ -26,7 +27,7 @@ export const EpisodeDischargeModal: React.FC<EpisodeDischargeModalProps> = ({
   onConfirmDischarge,
 }) => {
   const { isRtl, bi } = useLanguage();
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(localDate());
   const [dischargeReason, setDischargeReason] = useState('goals_met');
   const [dischargeSummary, setDischargeSummary] = useState('');
   const [dischargeCriteriaSummary, setDischargeCriteriaSummary] = useState(
@@ -34,6 +35,16 @@ export const EpisodeDischargeModal: React.FC<EpisodeDischargeModalProps> = ({
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setEndDate(localDate());
+    setDischargeReason('goals_met');
+    setDischargeSummary('');
+    setDischargeCriteriaSummary(episode.data.dischargeCriteriaSummary || '');
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, episode.id]);
 
   if (!isOpen) return null;
 
@@ -55,9 +66,9 @@ export const EpisodeDischargeModal: React.FC<EpisodeDischargeModalProps> = ({
         dischargeCriteriaSummary: dischargeCriteriaSummary.trim() || undefined,
       });
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to close episode:', err);
-      setError(err?.message || 'حدث خطأ أثناء إغلاق حلقة الرعاية.');
+      setError(err instanceof Error ? err.message : 'حدث خطأ أثناء إغلاق حلقة الرعاية.');
     } finally {
       setSubmitting(false);
     }
